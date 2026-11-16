@@ -41,6 +41,19 @@ function runtime() {
   return { loader, handlers, ...loader('main/settings-ipc'), ...loader('main/settings-ipc/lifecycle') }
 }
 
+test('packaged settings pages match equivalent file URL escaping without trusting other files', () => {
+  const { isSettingsPage } = runtime()
+  const expected = 'file:///C:/Users/RUNNER%7E1/Uta/resources/app.asar/out/renderer/index.html'
+  const target = { isDestroyed: () => false, getURL: () => 'file:///C:/Users/RUNNER~1/Uta/resources/app.asar/out/renderer/index.html?onboarding=1#settings' }
+  assert.equal(isSettingsPage(target, expected), true)
+  target.getURL = () => 'file:///C:/Users/RUNNER~1/Uta/resources/app.asar/out/renderer/other.html'
+  assert.equal(isSettingsPage(target, expected), false)
+  target.getURL = () => 'file://evil/C:/Users/RUNNER~1/Uta/resources/app.asar/out/renderer/index.html'
+  assert.equal(isSettingsPage(target, expected), false)
+  target.getURL = () => expected.replace('index.html', 'index%2Fhtml')
+  assert.equal(isSettingsPage(target, expected), false)
+})
+
 test('sender requires a live current main frame; navigated pages lose access', () => {
   const { isValidSettingsSender, isSettingsPage } = runtime()
   const frame = {}

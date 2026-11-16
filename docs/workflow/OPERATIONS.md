@@ -77,6 +77,8 @@ Windows 工作流运行同一套检查。普通分支推送与 PR 只检查源�
 
 两种包验证通过后上传到 `Uta-windows-x64` Actions 附件，保留 14 天。推送 `v<app/package.json 版本>` 标签触发相同构建；标签、应用与锁文件版本必须一致。只有构建、ZIP 和安装版检查全部通过，独立的 Release job 才获得 `contents: write`，重新核对校验清单后创建 Release 并上传两个包、来源清单和 SHA256 清单。含连字符的预发布版本标为 prerelease。已存在的 Release 不自动覆盖，避免同一版本附件被静默替换。
 
+打包页面的 IPC 文件 URL 校验按解码后的文件路径比较。Windows 短路径中的 `~` 在 Node 生成的 URL 中可能写成 `%7E`，Chromium 保留 `~`；逐字比较 URL pathname 会拒绝自己的页面。host、登记窗口和主 frame 仍须匹配，其他页面不可获权。
+
 查看云端结果用 `https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml`。首次验证使用手动构建，不为测试创建公开版本标签。自动检查仍不代替真实宿主、麦克风、旧数据升级和 Live2D 观感验收。
 
 ## 集成验收与提升

@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
+import { fileURLToPath } from 'node:url'
 import {
   SETTINGS_CHANNELS,
   type SettingsDocument,
@@ -54,9 +55,12 @@ export function isSettingsPage(target: WebContents, expectedUrl: string): boolea
     if (target.isDestroyed()) return false
     const actual = new URL(target.getURL())
     const expected = new URL(expectedUrl)
-    return actual.protocol === expected.protocol &&
-      actual.host === expected.host &&
-      actual.pathname === expected.pathname
+    if (actual.protocol !== expected.protocol || actual.host !== expected.host) return false
+    // Node escapes '~' in file URLs while Chromium leaves it unescaped, including
+    // Windows short paths. Compare decoded file paths rather than URL spelling.
+    return actual.protocol === 'file:'
+      ? fileURLToPath(actual) === fileURLToPath(expected)
+      : actual.pathname === expected.pathname
   } catch { return false }
 }
 

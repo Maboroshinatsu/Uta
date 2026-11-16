@@ -2,7 +2,7 @@
 
 ## 1. 仓库与版本
 
-- 主源码 `D:/Frankenstein/Uta`，分支 `main`，本轮基线 `90b2c60`；公开仓库基线 `0549348`，两者文件树一致。检查提交用 `git log -12 --oneline`，检查现场用 `git status --short --branch`。已有 18 项语音及宿主相关未提交文件继续保留，不纳入本轮发布。
+- 主源码 `D:/Frankenstein/Uta`，分支 `main`，本轮修复基线 `c00af43`；公开仓库基线 `2690df1`，两者文件树一致。检查提交用 `git log -12 --oneline`，检查现场用 `git status --short --branch`。已有 18 项语音及宿主相关未提交文件继续保留，不纳入本轮发布。
 - 用户授权将源码公开到 `https://github.com/Maboroshinatsu/Uta` 并按实际情况重写 README。公开版使用已提交源码的无历史快照，发布用独立仓库为 `D:/Frankenstein/.codex/publications/Uta`；本地主仓库的历史和在途改动保留。远端核对用 `git -C D:/Frankenstein/.codex/publications/Uta ls-remote origin refs/heads/main`，源码对应提交用该仓库的 `git config --get uta.sourceCommit` 查询。
 - Core、Hiyori 素材及编辑工程共 21 个文件取消 Git 跟踪，本机文件按 SHA256 核对保持原样。Uta 自有的 Hiyori 适配与预设 JSON 仍跟踪。开发和构建按 `app/scripts/live2d-assets.json` 固定来源、SHA256 下载 Core 与 Hiyori 运行文件；已有文件不覆盖，缓存不入 Git。操作见 [Live2D 构建资源](OPERATIONS.md#live2d-构建资源)。
 - 宿主安装与升级：Codex 检测及安装实时读取所选程序路径，连接器为 `0.2.5`，MCP 缓存入口与状态上报版本一致。DSH 连接器为 `0.5.7`，安装同时核对版本、依赖来源与实际链接；更新失败恢复配置和原链接。同一 DSH 数据目录的安装锁由所有 Uta profile 共用，目录联接也视为同一目标；未确认结束的安装须显式解除阻断。OpenCode 手动安装指南包含插件及 MCP 两份文件。
@@ -19,7 +19,9 @@
 
 ## 3. 验证状态
 
-- 本轮修改打包脚本、工作流、包验证与对应说明，应用业务代码未修改。新增 5 项打包回归通过，覆盖双包来源和 SHA256、仅 ZIP、脏源码、打包期间源码变化及错误参数。该回归使用受控构建工具，不代替真实 electron-builder 产物检查。
+- 双包工作流新增 5 项打包回归通过，覆盖双包来源和 SHA256、仅 ZIP、脏源码、打包期间源码变化及错误参数。该回归使用受控构建工具，不代替真实 electron-builder 产物检查。
+- 首次云端构建已生成 ZIP 和安装包，但 ZIP 运行检查发现设置 IPC 的页面校验将 Windows 短路径中的 `%7E` 与 Chromium 的 `~` 误判为不同页面。真实 Electron ASAR 探针复现后，文件 URL 改为按 `fileURLToPath` 解码后的路径比较，HTTP 路径、host、登记窗口和主 frame 约束保留；回归覆盖等价转义、其他页面、外部 host 和编码斜线。首次失败未上传附件。
+- 本轮设置 IPC、双窗与文档回归 33 项通过，两套类型检查通过。相同短路径下的真实 Electron ASAR 探针确认修复前拒绝、修复后允许自己的页面，主 frame 身份一致；探针使用独立数据，未启动或修改日常实例。
 - 公开源码的 Windows CI 已通过（包括真实资源下载与隔离 Electron）；双包构建的云端结果以 [Windows verification 运行记录](https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml)为准。检查发布仓库的 `git config --get uta.workflowRun` 与 `git config --get uta.ciStatus` 可查询本轮验证地址与结论，不将一次性运行状态写死在文档中。
 - 含在途宿主语音的工作区通过两套类型检查；应用回归 1493 项通过、6 项跳过。资源准备新增 7 项回归，覆盖本机文件与预设保留、校验失败、缺失条目、缓存修复、坏缓存重下、下载失败/超限和目标路径校验。本轮未改插件，137 项插件回归沿用本次开源复核结果。
 - 从暂存源码生成不含第三方资源的独立目录，独立 `npm ci`、真实下载校验 19 个运行文件、类型检查与应用回归 1485 项通过、6 项跳过。构建及真实 Electron 隔离启动、Hiyori 加载、历史读取、消息写盘与重启通过。独立目录不含 `.can3`、`.cmo3`，两份自有适配配置保留；工作区 21 个本机资源文件的 SHA256 未变化。
