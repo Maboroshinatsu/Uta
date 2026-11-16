@@ -2,7 +2,7 @@
 
 ## 1. 仓库与版本
 
-- 主源码 `D:/Frankenstein/Uta`，分支 `main`，本轮修复基线 `c00af43`；公开仓库基线 `2690df1`，两者文件树一致。检查提交用 `git log -12 --oneline`，检查现场用 `git status --short --branch`。已有 18 项语音及宿主相关未提交文件继续保留，不纳入本轮发布。
+- 主源码 `D:/Frankenstein/Uta`，分支 `main`，本轮修复基线 `24b34ef`；公开仓库基线 `5c24717`，两者文件树一致。检查提交用 `git log -12 --oneline`，检查现场用 `git status --short --branch`。已有 18 项语音及宿主相关未提交文件继续保留，不纳入本轮发布。
 - 用户授权将源码公开到 `https://github.com/Maboroshinatsu/Uta` 并按实际情况重写 README。公开版使用已提交源码的无历史快照，发布用独立仓库为 `D:/Frankenstein/.codex/publications/Uta`；本地主仓库的历史和在途改动保留。远端核对用 `git -C D:/Frankenstein/.codex/publications/Uta ls-remote origin refs/heads/main`，源码对应提交用该仓库的 `git config --get uta.sourceCommit` 查询。
 - Core、Hiyori 素材及编辑工程共 21 个文件取消 Git 跟踪，本机文件按 SHA256 核对保持原样。Uta 自有的 Hiyori 适配与预设 JSON 仍跟踪。开发和构建按 `app/scripts/live2d-assets.json` 固定来源、SHA256 下载 Core 与 Hiyori 运行文件；已有文件不覆盖，缓存不入 Git。操作见 [Live2D 构建资源](OPERATIONS.md#live2d-构建资源)。
 - 宿主安装与升级：Codex 检测及安装实时读取所选程序路径，连接器为 `0.2.5`，MCP 缓存入口与状态上报版本一致。DSH 连接器为 `0.5.7`，安装同时核对版本、依赖来源与实际链接；更新失败恢复配置和原链接。同一 DSH 数据目录的安装锁由所有 Uta profile 共用，目录联接也视为同一目标；未确认结束的安装须显式解除阻断。OpenCode 手动安装指南包含插件及 MCP 两份文件。
@@ -19,7 +19,7 @@
 
 ## 3. 验证状态
 
-- 双包工作流新增 5 项打包回归通过，覆盖双包来源和 SHA256、仅 ZIP、脏源码、打包期间源码变化及错误参数。该回归使用受控构建工具，不代替真实 electron-builder 产物检查。
+- 双包与版本标签回归 9 项通过，覆盖双包来源和 SHA256、仅 ZIP、脏源码、打包期间源码变化、错误参数，以及标签和锁文件两处版本一致性。该回归使用受控构建工具，不代替真实 electron-builder 产物检查。版本检查使用 Node 解析 JSON，避免 PowerShell `ConvertFrom-Json` 拒绝 npm 锁文件的空字符串根包键。
 - 首次云端构建已生成 ZIP 和安装包，但 ZIP 运行检查发现设置 IPC 的页面校验将 Windows 短路径中的 `%7E` 与 Chromium 的 `~` 误判为不同页面。真实 Electron ASAR 探针复现后，文件 URL 改为按 `fileURLToPath` 解码后的路径比较，HTTP 路径、host、登记窗口和主 frame 约束保留；回归覆盖等价转义、其他页面、外部 host 和编码斜线。首次失败未上传附件。
 - 本轮设置 IPC、双窗与文档回归 33 项通过，两套类型检查通过。相同短路径下的真实 Electron ASAR 探针确认修复前拒绝、修复后允许自己的页面，主 frame 身份一致；探针使用独立数据，未启动或修改日常实例。
 - 公开源码的 Windows CI 已通过（包括真实资源下载与隔离 Electron）；双包构建的云端结果以 [Windows verification 运行记录](https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml)为准。检查发布仓库的 `git config --get uta.workflowRun` 与 `git config --get uta.ciStatus` 可查询本轮验证地址与结论，不将一次性运行状态写死在文档中。

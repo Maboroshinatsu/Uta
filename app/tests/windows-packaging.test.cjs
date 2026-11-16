@@ -18,8 +18,8 @@ function fixture(t, mutate = false) {
   write('.gitignore', 'node_modules/\nout/\nbuild/\nrelease/\n')
   write('README.md', 'source fixture')
   write('app/package.json', JSON.stringify({ name: 'uta', version: '0.0.1-beta.1' }))
-  write('app/package-lock.json', JSON.stringify({ packages: {} }))
-  for (const name of ['package-windows.mjs', 'dependency-notices.mjs']) {
+  write('app/package-lock.json', JSON.stringify({ version: '0.0.1-beta.1', packages: { '': { version: '0.0.1-beta.1' } } }))
+  for (const name of ['package-windows.mjs', 'dependency-notices.mjs', 'verify-release-version.mjs']) {
     write(`app/scripts/${name}`, fs.readFileSync(path.join(__dirname, '../scripts', name)))
   }
   write('app/node_modules/electron/install.js', '')
@@ -40,6 +40,37 @@ function fixture(t, mutate = false) {
   return { root, app, git, run: (...args) => spawnSync(process.execPath, ['scripts/package-windows.mjs', ...args], {
     cwd: app, env, encoding: 'utf8', windowsHide: true,
   }) }
+}
+
+function releaseVersion(h, tag) {
+  return spawnSync(process.execPath, ['scripts/verify-release-version.mjs'], {
+    cwd: h.app, env: { ...process.env, GITHUB_REF_NAME: tag }, encoding: 'utf8', windowsHide: true,
+  })
+}
+
+test('release tags accept matching npm lockfiles with an empty root package key', t => {
+  const result = releaseVersion(fixture(t), 'v0.0.1-beta.1')
+  assert.equal(result.status, 0, result.stderr)
+})
+
+test('release tags must match the complete application version', t => {
+  const result = releaseVersion(fixture(t), 'v0.0.1')
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /versions must match/)
+})
+
+for (const rootPackage of [false, true]) {
+  test(`release tags reject a mismatched lockfile ${rootPackage ? 'root package' : 'top-level'} version`, t => {
+    const h = fixture(t)
+    const file = path.join(h.app, 'package-lock.json')
+    const lock = JSON.parse(fs.readFileSync(file))
+    if (rootPackage) lock.packages[''].version = '0.0.0'
+    else lock.version = '0.0.0'
+    fs.writeFileSync(file, JSON.stringify(lock))
+    const result = releaseVersion(h, 'v0.0.1-beta.1')
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /versions must match/)
+  })
 }
 
 for (const zipOnly of [false, true]) {

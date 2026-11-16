@@ -37,13 +37,7 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - name: Check release version
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $lockVersion = (Get-Content package-lock.json -Raw | ConvertFrom-Json).version
-          if ($env:GITHUB_REF_NAME -cne "v$version" -or $lockVersion -cne $version) {
-            throw "Tag, package.json and package-lock.json versions must match."
-          }
+        run: node scripts/verify-release-version.mjs
       - run: npm ci
       - run: npm run assets:prepare
       - run: npm run typecheck
