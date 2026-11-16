@@ -11,9 +11,18 @@ import { Worker } from 'node:worker_threads'
 
 const appDir = fileURLToPath(new URL('../', import.meta.url))
 const require = createRequire(import.meta.url)
-const candidate = process.argv[2] === '--candidate'
+const mode = process.argv[2]
+if (process.argv.length > 3 || (mode && !['--candidate', '--installer'].includes(mode))) {
+  throw Error('Usage: verify-windows.mjs [--candidate|--installer]')
+}
+const candidate = mode === '--candidate'
+const installer = mode === '--installer'
+const packaged = candidate || installer
 const pkg = require('../package.json')
 if (process.platform !== 'win32') throw Error('Windows is required for this verification.')
+if (installer && (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted')) {
+  throw Error('Installer verification requires a disposable GitHub-hosted Windows runner.')
+}
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'uta-windows-check-'))
 const profile = path.join(root, 'profile')
@@ -21,6 +30,7 @@ const endpointFile = path.join(profile, 'runtime-endpoint.json')
 const historyFile = path.join(profile, 'chat-history.v1.json')
 const legacyMessage = 'Message saved by the previous version.'
 const liveMessage = 'Message sent through the running desktop bridge.'
+let uninstaller
 
 async function waitFor(read, description, deadline = Date.now() + 25000) {
   while (Date.now() < deadline) {
@@ -32,24 +42,36 @@ async function waitFor(read, description, deadline = Date.now() + 25000) {
 }
 
 async function verifyCandidate() {
-  const archive = path.join(appDir, 'release', `Uta-${pkg.version}-win-x64.zip`)
+  const archive = path.join(appDir, 'release', installer ? `Uta-Setup-${pkg.version}.exe` : `Uta-${pkg.version}-win-x64.zip`)
   const manifest = JSON.parse(fs.readFileSync(`${archive}.manifest.json`, 'utf8'))
   const hash = createHash('sha256')
   for await (const chunk of fs.createReadStream(archive)) hash.update(chunk)
   assert.equal(hash.digest('hex'), manifest.sha256)
   assert.equal(manifest.dirty, false)
   assert.equal(manifest.commit, execFileSync('git', ['rev-parse', 'HEAD'], { cwd: appDir, encoding: 'utf8' }).trim())
+  assert.equal(manifest.version, pkg.version)
+  assert.equal(manifest.archive, path.basename(archive))
   const destination = path.join(root, 'candidate')
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    'Expand-Archive -LiteralPath $env:UTA_VERIFY_ARCHIVE -DestinationPath $env:UTA_VERIFY_PACKAGE_DIR'], {
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', installer
+    ? '$p = Start-Process -FilePath $env:UTA_VERIFY_ARCHIVE -ArgumentList "/S /currentuser /D=$env:UTA_VERIFY_PACKAGE_DIR" -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode'
+    : 'Expand-Archive -LiteralPath $env:UTA_VERIFY_ARCHIVE -DestinationPath $env:UTA_VERIFY_PACKAGE_DIR'], {
     env: { ...process.env, UTA_VERIFY_ARCHIVE: archive, UTA_VERIFY_PACKAGE_DIR: destination }, windowsHide: true,
+    timeout: 120000,
   })
-  const { extractFile } = require('@electron/asar')
+  if (installer) uninstaller = path.join(destination, 'Uninstall Uta.exe')
+  const { extractFile, listPackage } = require('@electron/asar')
   const archiveAsar = path.join(destination, 'resources', 'app.asar')
   const build = JSON.parse(extractFile(archiveAsar, path.join('out', 'build-info.json')).toString('utf8'))
   assert.equal(build.commit, manifest.commit)
   assert.equal(build.version, manifest.version)
   assert.ok(extractFile(archiveAsar, path.join('out', 'main', 'model-import-worker.js')).length)
+  assert.equal(listPackage(archiveAsar).some(file => /\.(can3|cmo3)$/i.test(file)), false)
+  for (const file of ['LICENSE-Uta.txt', 'THIRD_PARTY_LICENSES.md', 'THIRD-PARTY-NOTICES.txt', 'HIYORI-README.txt', 'FIRST-READ.md', 'MAIBOT-ADAPTER.md', 'Pets/README.txt']) {
+    assert.ok(fs.statSync(path.join(destination, file)).size > 0, `Missing bundled file: ${file}`)
+  }
+  for (const directory of ['codex-marketplace', 'deepseek-harness', 'uta-qoder-plugin', 'uta-antigravity-plugin', 'claude-marketplace', 'zcode-marketplace', 'uta-opencode-plugin']) {
+    assert.ok(fs.statSync(path.join(destination, 'resources', 'uta-plugins', directory)).isDirectory(), `Missing connector: ${directory}`)
+  }
   return path.join(destination, 'Uta.exe')
 }
 
@@ -91,7 +113,7 @@ async function withDesktop(executable, action) {
   }
   for (const key of ['DESKPET_ENDPOINT_FILE', 'ELECTRON_RUN_AS_NODE', 'ELECTRON_RENDERER_URL']) delete env[key]
   const graphics = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
-  const child = spawn(executable, candidate ? graphics : [appDir, ...graphics], {
+  const child = spawn(executable, packaged ? graphics : [appDir, ...graphics], {
     env, cwd: path.dirname(executable), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let logs = ''
@@ -141,8 +163,8 @@ try {
     { id: 'legacy-message', role: 'assistant', text: legacyMessage, timestamp: 1 },
     { id: 'legacy-receipt', role: 'assistant', text: 'Old completion', timestamp: 2, kind: 'completion' },
   ] }))
-  const executable = candidate ? await verifyCandidate() : require('electron')
-  if (!candidate) await verifyBuiltWorker()
+  const executable = packaged ? await verifyCandidate() : require('electron')
+  if (!packaged) await verifyBuiltWorker()
   await withDesktop(executable, async endpoint => {
     await waitFor(async () => {
       const context = await runtimeRequest(endpoint, '/context')
@@ -167,5 +189,11 @@ try {
   })
   console.log('Windows startup, bundled Live2D, legacy history, renderer notification and restart passed.')
 } finally {
+  if (uninstaller && fs.existsSync(uninstaller)) {
+    execFileSync(uninstaller, ['/S'], { windowsHide: true, timeout: 120000 })
+    await waitFor(() => !fs.existsSync(path.join(path.dirname(uninstaller), 'Uta.exe')), 'installer removal')
+    assert.ok(fs.existsSync(historyFile), 'Uninstall removed the isolated user data')
+    console.log('Windows installer and uninstaller passed.')
+  }
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 })
 }

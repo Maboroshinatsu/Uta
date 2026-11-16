@@ -4,20 +4,27 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       candidate:
-        description: Build and verify a temporary Windows ZIP
+        description: Build, verify and upload Windows ZIP and installer
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     defaults:
       run:
         working-directory: app
@@ -28,6 +35,15 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $lockVersion = (Get-Content package-lock.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -cne "v$version" -or $lockVersion -cne $version) {
+            throw "Tag, package.json and package-lock.json versions must match."
+          }
       - run: npm ci
       - run: npm run assets:prepare
       - run: npm run typecheck
@@ -35,7 +51,52 @@ jobs:
       - run: npm run test:plugin
       - run: npm run build
       - run: npm run verify:windows
-      - if: github.event_name == 'workflow_dispatch' && inputs.candidate
-        run: npm run dist:zip
-      - if: github.event_name == 'workflow_dispatch' && inputs.candidate
+      - name: Build Windows ZIP and installer
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.candidate)
+        run: npm run dist
+      - name: Verify ZIP startup and restart
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.candidate)
         run: npm run verify:windows -- --candidate
+      - name: Verify installer, startup and uninstall
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.candidate)
+        run: npm run verify:windows -- --installer
+      - name: Upload Windows packages
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.candidate)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Uta-windows-x64
+          path: |
+            app/release/Uta-*-win-x64.zip
+            app/release/Uta-Setup-*.exe
+            app/release/Uta-*.manifest.json
+            app/release/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Uta-windows-x64
+          path: packages
+      - name: Publish verified packages
+        working-directory: packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum --check SHA256SUMS.txt
+          flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_TAG" Uta-*-win-x64.zip Uta-Setup-*.exe Uta-*.manifest.json SHA256SUMS.txt \
+            --verify-tag --title "Uta $RELEASE_TAG" --generate-notes "${flags[@]}"

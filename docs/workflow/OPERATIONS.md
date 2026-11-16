@@ -52,26 +52,32 @@ node scripts/doctor.mjs qoder-session-reset
 
 Windows 打包配置使用 `src/renderer/public/icon.ico`；窗口与托盘使用同目录的 PNG。设置页、标题栏、首次引导和页面图标直接使用同一 SVG。
 
-## 打包 ZIP
+## Windows 打包
 
 ```powershell
 cd app
 npm run typecheck
 npm test
 npm run test:plugin
-npm run dist:zip
+npm run dist
 npm run verify:windows -- --candidate
 ```
 
-普通产物为 `app/release/Uta-<版本>-win-x64.zip` 和同名 `.manifest.json`。明确启用 `UTA_SHARE_PACKAGE=1` 且提供有分发许可的 `UTA_DS_MODEL_DIR` 时，分享包使用 `Uta-<版本>-share-win-x64.zip`，另带 DS 模型和署名。清单记录提交、工作区 dirty 状态、时间和 SHA256。ZIP 内也有 `resources/app.asar` 中的构建来源，可通过受限 IPC `utaAPI.getEnvironmentInfo()` 查询环境与版本。
+`npm run dist` 在一次构建中生成 `app/release/Uta-<版本>-win-x64.zip` 和 `Uta-Setup-<版本>.exe`。每个文件有同名 `.manifest.json`，共同的 `SHA256SUMS.txt` 记录两个文件的 SHA256。清单和包内 `resources/app.asar` 的 `out/build-info.json` 使用同一份提交、版本与构建时间。安装包使用 NSIS，允许选择目录，卸载保留用户数据；当前未配置代码签名。
 
-只能提升干净、已验收提交的包。打包入口拒绝未提交源码，并在结束时再次核对提交与工作区，防止打包期间源码变化。打包脚本不自动提升日常版本、不修改平台插件配置。Windows NSIS 原有命令暂保留用于兼容，但本项目已确认的日常交付形式是 ZIP 解压版。
+只需要 ZIP 时运行 `npm run dist:zip`。明确启用 `UTA_SHARE_PACKAGE=1` 且提供有分发许可的 `UTA_DS_MODEL_DIR` 时，只能走该 ZIP 入口，分享包使用 `Uta-<版本>-share-win-x64.zip`，另带 DS 模型和署名。运行环境与来源也可通过受限 IPC `utaAPI.getEnvironmentInfo()` 查询。
+
+只能提升干净、已验收提交的包。打包入口拒绝未提交源码，并在结束时再次核对提交与工作区，防止打包期间源码变化。打包脚本不自动提升日常版本、不修改平台插件配置。
 
 ## Windows 自动验收
 
 在 `app` 中用 Node.js 22.12 或更新版本安装依赖。运行 `npm run typecheck`、`npm test` 和 `npm run test:plugin`，覆盖双 DSH 实例与会话切换、历史容量和重启、模型导入及动作曲线导出。运行 `npm run build` 后执行 `npm run verify:windows`，在独立数据目录中启动真实 Electron，检查旧消息和回执读取、本机桥到渲染进程的通知写盘、重启，以及构建后的模型检查工作线程。
 
-Windows 工作流运行同一套检查。只有手动运行并选中 `candidate` 时，才生成临时 ZIP，核对 SHA256 和包内外提交信息，解压启动并验证隔离数据。候选验收还需逐项检查真实宿主、麦克风和 Live2D 观感。
+Windows 工作流运行同一套检查。普通分支推送与 PR 只检查源码。手动运行默认勾选 `candidate`，同时生成 ZIP 和 NSIS 安装包，核对 SHA256、提交信息、说明文件和连接器，解压 ZIP 后验证模型加载、历史读取、通知和重启。安装包在一次性的 GitHub 托管 Windows runner 中静默安装到临时目录，执行同样的运行检查后卸载；`verify:windows -- --installer` 拒绝在本机和自托管 runner 上运行，避免修改日常安装记录。
+
+两种包验证通过后上传到 `Uta-windows-x64` Actions 附件，保留 14 天。推送 `v<app/package.json 版本>` 标签触发相同构建；标签、应用与锁文件版本必须一致。只有构建、ZIP 和安装版检查全部通过，独立的 Release job 才获得 `contents: write`，重新核对校验清单后创建 Release 并上传两个包、来源清单和 SHA256 清单。含连字符的预发布版本标为 prerelease。已存在的 Release 不自动覆盖，避免同一版本附件被静默替换。
+
+查看云端结果用 `https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml`。首次验证使用手动构建，不为测试创建公开版本标签。自动检查仍不代替真实宿主、麦克风、旧数据升级和 Live2D 观感验收。
 
 ## 集成验收与提升
 

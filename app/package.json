@@ -25,8 +25,8 @@
     "test:host": "node --test tests/fake-host.test.cjs tests/host-boundary.test.cjs",
     "electron:install": "install-electron",
     "verify:windows": "node scripts/verify-windows.mjs",
-    "dist": "npm run plugin:build && npm run licenses && npm run electron:install && electron-vite build && electron-builder --win nsis",
-    "dist:zip": "npm run plugin:build && node scripts/package-zip.mjs",
+    "dist": "npm run plugin:build && node scripts/package-windows.mjs",
+    "dist:zip": "npm run plugin:build && node scripts/package-windows.mjs --zip-only",
     "workspace:status": "node ../scripts/workspace.mjs status",
     "workspace:new": "node ../scripts/workspace.mjs new",
     "licenses": "node scripts/dependency-notices.mjs"

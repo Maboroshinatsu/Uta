@@ -41,6 +41,7 @@ win:
   artifactName: ${productName}-Setup-${version}.${ext}
 
 nsis:
+  artifactName: ${productName}-Setup-${version}.${ext}
   oneClick: false
   perMachine: false
   allowElevation: true

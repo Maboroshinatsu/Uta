@@ -181,14 +181,20 @@ npm run typecheck
 npm test
 npm run test:plugin
 
-# 打包便携版 ZIP 压缩包
-npm run dist:zip
+# 同时打包 ZIP 解压版和 Windows 安装版
+npm run dist
 
 # 验证本地打包候选件
 npm run verify:windows -- --candidate
 ```
 
-打包产物与来源物料清单生成在 `app/release/` 下。运行打包要求工作区源码提交完全干净。打包产物解压后直接执行 `Uta.exe` 即可使用；如需测试独立隔离环境，可运行 `Try-Uta.bat`。[详细说明见发布指南](docs/releases/ZIP-FIRST-READ.md)。
+打包产物与来源清单生成在 `app/release/` 下，包括 `Uta-<版本>-win-x64.zip`、`Uta-Setup-<版本>.exe`、各自的 `.manifest.json` 和 `SHA256SUMS.txt`。只需要 ZIP 时运行 `npm run dist:zip`。打包要求源码已提交且工作区干净。
+
+ZIP 完整解压后运行 `Uta.exe`；`Try-Uta.bat` 使用独立试用数据。安装版可选择安装目录并创建快捷方式，卸载时保留用户数据。两种版本默认均使用 `%APPDATA%/uta`。[ZIP 使用说明](docs/releases/ZIP-FIRST-READ.md)
+
+GitHub [Windows verification](https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml) 会自动检查推送和 PR。手动点击 **Run workflow**，保留勾选 `candidate`，通过检查后可在该次运行的 **Artifacts → Uta-windows-x64** 下载 ZIP 和安装版，附件保留 14 天。推送与应用版本一致的 `v*` 标签时，工作流会自动发布到 [Releases](https://github.com/Maboroshinatsu/Uta/releases)；带预发布标识的版本会标为预发布。
+
+当前程序未做 Windows 代码签名，下载或运行时可能出现系统提示。
 
 ---
 
