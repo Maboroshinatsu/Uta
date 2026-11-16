@@ -1,0 +1,343 @@
+{
+  "version": 1,
+  "modelId": "c_0120",
+  "name": "DS 鲸鱼娘",
+  "idleMotions": [
+    "idle"
+  ],
+  "lipSync": {
+    "mouthOpenParam": "ParamMouthOpenY",
+    "gain": 1
+  },
+  "baseParameters": {},
+  "hiddenParts": [],
+  "emotions": {
+    "happy": {
+      "expression": "开心兴奋"
+    },
+    "sad": {
+      "expression": "悲伤"
+    },
+    "angry": {
+      "expression": "生气"
+    },
+    "surprise": {
+      "expression": "感叹号"
+    },
+    "thinking": {
+      "parameters": {
+        "ParamEyeLOpen": 0.9,
+        "ParamEyeROpen": 0.9,
+        "ParamBrowLY": 0.2,
+        "ParamBrowRY": 0.2,
+        "ParamMouthForm": -0.15
+      }
+    },
+    "shy": {
+      "expression": "脸红"
+    },
+    "curious": {
+      "expression": "问号"
+    },
+    "love": {
+      "expression": "爱心眼"
+    },
+    "excited": {
+      "expression": "星星眼"
+    },
+    "pout": {
+      "expression": "调皮"
+    },
+    "smug": {
+      "expression": "调皮"
+    },
+    "confused": {
+      "expression": "问号"
+    },
+    "sweat": {
+      "expression": "流汗"
+    },
+    "dizzy": {
+      "expression": "晕晕"
+    },
+    "gloomy": {
+      "expression": "阴暗"
+    },
+    "alert": {
+      "expression": "感叹号"
+    },
+    "cry": {
+      "expression": "哭"
+    },
+    "sleepy": {
+      "expression": "闭眼口水"
+    },
+    "grumpy": {
+      "expression": "生气"
+    }
+  },
+  "animations": {
+    "paw": {
+      "motion": {
+        "group": "idle",
+        "index": 0
+      }
+    },
+    "stretch": {
+      "motion": {
+        "group": "aidale",
+        "index": 0
+      }
+    },
+    "selfie": {
+      "motion": {
+        "group": "selfie",
+        "index": 0
+      }
+    },
+    "selfieQuick": {
+      "motion": {
+        "group": "selfieQuick",
+        "index": 0
+      }
+    },
+    "ketchup": {
+      "motion": {
+        "group": "ketchup",
+        "index": 0
+      }
+    },
+    "openLid": {
+      "motion": {
+        "group": "openLid",
+        "index": 0
+      }
+    },
+    "bubble": {
+      "motion": {
+        "group": "bubble",
+        "index": 0
+      }
+    },
+    "splash": {
+      "motion": {
+        "group": "splash",
+        "index": 0
+      }
+    }
+  },
+  "controls": {
+    "爱心眼": {
+      "expression": "爱心眼",
+      "label": "爱心眼",
+      "category": "face_effect"
+    },
+    "悲伤": {
+      "expression": "悲伤",
+      "label": "悲伤",
+      "category": "face_effect"
+    },
+    "生气": {
+      "expression": "生气",
+      "label": "生气",
+      "category": "face_effect"
+    },
+    "流汗": {
+      "expression": "流汗",
+      "label": "流汗",
+      "category": "face_effect"
+    },
+    "使巴菲消失": {
+      "expression": "巴菲",
+      "label": "巴菲",
+      "category": "pose_prop"
+    },
+    "撤回": {
+      "expression": "撤回",
+      "label": "撤回",
+      "category": "face_effect"
+    },
+    "呆呆眼": {
+      "expression": "呆呆眼",
+      "label": "呆呆眼",
+      "category": "face_effect"
+    },
+    "单边马尾": {
+      "expression": "单边马尾",
+      "label": "单边马尾",
+      "category": "hair"
+    },
+    "蛋包饭": {
+      "expression": "蛋包饭",
+      "label": "蛋包饭",
+      "category": "pose_prop"
+    },
+    "点菜按下": {
+      "expression": "点菜按下",
+      "label": "点菜按下",
+      "category": "pose_prop"
+    },
+    "方眼镜": {
+      "expression": "方眼镜",
+      "label": "方眼镜",
+      "category": "outfit"
+    },
+    "蝴蝶结贴纸": {
+      "expression": "蝴蝶结贴纸",
+      "label": "蝴蝶结贴纸",
+      "category": "outfit"
+    },
+    "画笔": {
+      "expression": "画笔",
+      "label": "画笔",
+      "category": "pose_prop"
+    },
+    "MoeMoeQ~": {
+      "expression": "挤",
+      "label": "挤压",
+      "category": "face_effect"
+    },
+    "鲸鱼": {
+      "expression": "鲸鱼",
+      "label": "鲸鱼",
+      "category": "outfit"
+    },
+    "鲸鱼放桌上": {
+      "expression": "鲸鱼放桌上",
+      "label": "鲸鱼放桌上",
+      "category": "outfit"
+    },
+    "猫猫贴纸": {
+      "expression": "猫猫贴纸",
+      "label": "猫猫耳",
+      "category": "outfit"
+    },
+    "喵喵手~喵~动画": {
+      "expression": "喵喵手~喵~动画",
+      "label": "喵喵手",
+      "category": "pose_prop"
+    },
+    "魔爪": {
+      "expression": "魔爪",
+      "label": "魔爪",
+      "category": "pose_prop"
+    },
+    "魔爪换色": {
+      "expression": "魔爪换色",
+      "label": "魔爪换色",
+      "category": "pose_prop"
+    },
+    "墨镜": {
+      "expression": "墨镜",
+      "label": "墨镜",
+      "category": "outfit"
+    },
+    "情绪花花": {
+      "expression": "情绪花花",
+      "label": "情绪花花",
+      "category": "face_effect"
+    },
+    "深色桌布": {
+      "expression": "深色桌布",
+      "label": "深色桌布",
+      "category": "outfit"
+    },
+    "手机换色": {
+      "expression": "手机换色",
+      "label": "手机换色",
+      "category": "pose_prop"
+    },
+    "双手比耶": {
+      "expression": "双手比耶",
+      "label": "双手比耶",
+      "category": "pose_prop"
+    },
+    "头箍": {
+      "expression": "头箍",
+      "label": "头箍",
+      "category": "outfit"
+    },
+    "吐魂": {
+      "expression": "吐魂",
+      "label": "吐魂",
+      "category": "face_effect"
+    },
+    "吐舌": {
+      "expression": "吐舌",
+      "label": "吐舌",
+      "category": "face_effect"
+    },
+    "兔兔贴纸": {
+      "expression": "兔兔贴纸",
+      "label": "兔兔耳",
+      "category": "outfit"
+    },
+    "椭圆眼镜": {
+      "expression": "椭圆眼镜",
+      "label": "椭圆眼镜",
+      "category": "outfit"
+    },
+    "橡皮": {
+      "expression": "橡皮",
+      "label": "橡皮",
+      "category": "pose_prop"
+    },
+    "心跳": {
+      "expression": "心跳",
+      "label": "心跳",
+      "category": "face_effect"
+    },
+    "圆眼镜": {
+      "expression": "圆眼镜",
+      "label": "圆眼镜",
+      "category": "outfit"
+    },
+    "冒爱心动画": {
+      "expression": "love",
+      "label": "爱心动画",
+      "category": "face_effect"
+    },
+    "手机手": {
+      "parameters": {
+        "phone": 1
+      },
+      "label": "手机手",
+      "category": "pose_prop"
+    },
+    "开心兴奋": {
+      "expression": "开心兴奋",
+      "label": "开心兴奋",
+      "category": "face_effect"
+    },
+    "星星眼": {
+      "expression": "星星眼",
+      "label": "星星眼",
+      "category": "face_effect"
+    },
+    "脸红": {
+      "expression": "脸红",
+      "label": "脸红",
+      "category": "face_effect"
+    },
+    "哭": {
+      "expression": "哭",
+      "label": "哭",
+      "category": "face_effect"
+    },
+    "闭眼口水": {
+      "expression": "闭眼口水",
+      "label": "闭眼口水",
+      "category": "face_effect"
+    },
+    "问号": {
+      "expression": "问号",
+      "label": "问号",
+      "category": "face_effect"
+    },
+    "感叹号": {
+      "expression": "感叹号",
+      "label": "感叹号",
+      "category": "face_effect"
+    }
+  }
+}

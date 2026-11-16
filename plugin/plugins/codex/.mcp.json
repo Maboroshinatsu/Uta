@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "uta-deskpet": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),url=require('node:url');const root=process.argv[1],file='runtime/deskpet-mcp.mjs';let matches=[];if(root&&!root.startsWith('$')&&fs.existsSync(path.join(root,file)))matches=[path.join(root,file)];else{const cache=path.join(process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),'plugins','cache');try{for(const market of fs.readdirSync(cache,{withFileTypes:true}))if(market.isDirectory()){const p=path.join(cache,market.name,'uta-deskpet','0.2.5',file);if(fs.existsSync(p))matches.push(fs.realpathSync(p))}}catch(e){if(e.code!=='ENOENT')throw e}matches=[...new Set(matches)]}if(matches.length!==1){console.error('[uta-deskpet] MCP runtime not found or ambiguous; reinstall the plugin.');process.exit(1)}import(url.pathToFileURL(matches[0]).href).catch(e=>{console.error(e);process.exit(1)})",
+        "${PLUGIN_ROOT}"
+      ],
+      "env": {
+        "UTA_HOST": "codex"
+      },
+      "env_vars": [
+        "APPDATA",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "PATH",
+        "DESKPET_ENDPOINT_FILE",
+        "UTA_ENDPOINT_FILE",
+        "UTA_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CODEX_HOME",
+        "UTA_PROFILE",
+        "UTA_USER_DATA_DIR",
+        "UTA_RUNTIME_DIR"
+      ]
+    }
+  }
+}

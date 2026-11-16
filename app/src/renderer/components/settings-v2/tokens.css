@@ -1,0 +1,118 @@
+/* 蓝调生息 (Blue Biophilic) 设计系统
+ * 暖燕麦纸面 + 低饱和蓝 + 鼠尾草/沙色混色，柔和曲率，安静层次。
+ * 参考 docs/design/blue-biophilic-2026-10-25.md。
+ */
+:root {
+  color-scheme: light;
+  --uta-canvas: #F4F1E9;
+  --uta-surface: #FFFCF6;
+  --uta-surface-subtle: #F8F5EE;
+  --uta-input: #F7F3EA;
+  --uta-input-focus: #FFFDF8;
+  --uta-input-border: #E2DBCE;
+  --uta-separator: #E5DFD3;
+  --uta-whisper-line: rgba(28, 42, 49, 0.06);
+
+  --uta-ink: #1C2A31;
+  --uta-secondary: #5D6F6C;
+  --uta-muted: #5A6B68;
+
+  --uta-accent: #3D6A8E;
+  --uta-accent-rgb: 61, 106, 142;
+  --uta-accent-strong: #345C7B;
+  --uta-accent-hover: #345C7B;
+  --uta-accent-soft: #E4EEF4;
+  --uta-accent-text: #FFFFFF;
+  /* 强调色用作文字时的可读版本；深色主题会把它提亮，填充仍用原色 */
+  --uta-accent-read: var(--uta-accent);
+  --uta-sage: #7E938C;
+  --uta-sand: #E7D9C6;
+
+  --uta-action: #3D6A8E;
+  --uta-action-text: #FFFFFF;
+  --uta-action-hover: #345C7B;
+
+  --uta-focus: #3D6A8E;
+  --uta-focus-ring: rgba(61, 106, 142, 0.3);
+
+  --uta-success: #2F6F5E;
+  --uta-success-bg: #E6F2EC;
+  --uta-warning: #8A5B1E;
+  --uta-warning-bg: #F8EEDC;
+  --uta-error: #B4544A;
+  --uta-error-bg: #F7E8E4;
+  --uta-danger-text: #A64137;
+  --uta-status-on: #FFFFFF;
+
+  --uta-radius-sm: 10px;
+  --uta-radius-md: 14px;
+  --uta-radius-lg: 20px;
+  --uta-radius-xl: 24px;
+  --uta-radius-full: 9999px;
+
+  --uta-shadow-card: 0 2px 8px rgba(28, 42, 49, 0.035), 0 12px 32px rgba(28, 42, 49, 0.06);
+  --uta-shadow-hover: 0 4px 14px rgba(28, 42, 49, 0.06), 0 18px 40px rgba(28, 42, 49, 0.09);
+
+  --uta-duration-fast: 140ms;
+  --uta-duration-normal: 240ms;
+  --uta-duration-slow: 420ms;
+  --uta-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --uta-ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --uta-transition-fast: 140ms var(--uta-ease-out);
+  --uta-transition-normal: 240ms var(--uta-ease-out);
+}
+
+/* 限定 :root：设置窗口根节点同样带 data-theme，未限定会覆盖运行时下发的强调色 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --uta-canvas: #121A1E;
+  --uta-surface: #1B252A;
+  --uta-surface-subtle: #223036;
+  --uta-input: #172126;
+  --uta-input-focus: #202C32;
+  --uta-input-border: #33454C;
+  --uta-separator: #2D3D42;
+  --uta-whisper-line: rgba(243, 239, 230, 0.06);
+
+  --uta-ink: #F3EFE6;
+  --uta-secondary: #A9B7B4;
+  --uta-muted: #8E9D9A;
+
+  --uta-accent: #7FA9C9;
+  --uta-accent-rgb: 127, 169, 201;
+  --uta-accent-strong: #9FC2DB;
+  --uta-accent-hover: #9FC2DB;
+  --uta-accent-soft: rgba(var(--uta-accent-rgb), 0.22);
+  --uta-accent-text: #FFFFFF;
+  --uta-accent-read: color-mix(in srgb, var(--uta-accent) 55%, #FFFFFF);
+  --uta-sage: #93AAA2;
+  --uta-sand: #4A4034;
+
+  --uta-action: var(--uta-accent);
+  --uta-action-text: var(--uta-accent-text, #FFFFFF);
+  --uta-action-hover: var(--uta-accent-hover);
+
+  --uta-focus: var(--uta-accent);
+  --uta-focus-ring: rgba(var(--uta-accent-rgb), 0.36);
+
+  --uta-success: #8FD3B8;
+  --uta-success-bg: #17342C;
+  --uta-warning: #F0C27D;
+  --uta-warning-bg: #3A2A12;
+  --uta-error: #F0A69C;
+  --uta-error-bg: #3B1D1A;
+  --uta-danger-text: #F0A69C;
+  --uta-status-on: #0D1A20;
+
+  --uta-shadow-card: 0 2px 10px rgba(0, 0, 0, 0.22), 0 14px 34px rgba(0, 0, 0, 0.28);
+  --uta-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.3), 0 20px 44px rgba(0, 0, 0, 0.36);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "uta-deskpet": {
+      "command": "${QODER_NODE_RUNTIME}",
+      "args": ["${QODER_PLUGIN_ROOT}/runtime/deskpet-mcp.mjs"],
+      "env": {
+        "UTA_HOST": "qoder"
+      },
+      "startup": "application",
+      "timeout": 600000,
+      "alwaysAllow": [
+        "deskpet_get_capabilities",
+        "deskpet_notify",
+        "deskpet_set_emotion",
+        "deskpet_set_preset",
+        "deskpet_play_animation"
+      ]
+    }
+  }
+}

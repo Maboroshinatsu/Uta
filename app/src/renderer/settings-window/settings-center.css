@@ -1,0 +1,400 @@
+/* Shared surfaces for the standalone settings centre. Quiet Bento panels,
+ * one layer of chrome, and rows instead of a card around every control. */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.settings-stack:not([hidden]) {
+  animation: page-enter 360ms var(--uta-ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Author display rules beat the UA [hidden] rule; keep backgrounded pages hidden. */
+.settings-stack[hidden],
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-panel {
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--uta-separator);
+  border-radius: 16px;
+  background-color: var(--uta-surface);
+  box-shadow: var(--uta-shadow-card);
+  transition:
+    background-color 0.28s ease,
+    color 0.28s ease,
+    border-color var(--uta-transition-fast),
+    box-shadow var(--uta-transition-fast);
+}
+
+.settings-panel:hover {
+  border-color: var(--uta-input-border);
+}
+
+.settings-panel.is-quiet {
+  background-color: var(--uta-surface-subtle);
+  box-shadow: none;
+}
+
+.settings-panel.is-flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.panel-head-copy {
+  min-width: 0;
+}
+
+.panel-kicker {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--uta-accent-read);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--uta-ink);
+}
+
+.panel-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--uta-secondary);
+}
+
+.panel-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background-color: var(--uta-canvas);
+  color: var(--uta-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.panel-badge.is-positive {
+  background-color: var(--uta-success-bg);
+  color: var(--uta-success);
+}
+
+.panel-badge.is-warning {
+  background-color: var(--uta-warning-bg);
+  color: var(--uta-warning);
+}
+
+.panel-divider {
+  height: 1px;
+  margin: 12px 0 2px;
+  background-color: var(--uta-separator);
+}
+
+.field-label {
+  display: block;
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--uta-secondary);
+}
+
+.settings-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background-color: var(--uta-canvas);
+  color: var(--uta-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-note strong {
+  color: var(--uta-ink);
+  font-weight: 650;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 11px;
+  background-color: var(--uta-canvas);
+}
+
+.segmented-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--uta-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--uta-transition-fast), color var(--uta-transition-fast);
+}
+
+.segmented-btn:hover {
+  color: var(--uta-ink);
+}
+
+.segmented-btn.is-active {
+  background-color: var(--uta-surface);
+  color: var(--uta-accent-read);
+  font-weight: 650;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.segmented-btn:focus-visible {
+  outline: 2px solid var(--uta-focus);
+  outline-offset: 2px;
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.choice-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 56px;
+  padding: 12px 13px;
+  border: 1px solid var(--uta-separator);
+  border-radius: 12px;
+  background-color: var(--uta-canvas);
+  color: var(--uta-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.28s ease,
+    color 0.28s ease,
+    border-color var(--uta-transition-fast);
+}
+
+.choice-card:hover {
+  border-color: var(--uta-muted);
+}
+
+.choice-card.is-active {
+  border-color: var(--uta-accent);
+  background-color: var(--uta-accent-soft);
+}
+
+.choice-card:focus-visible {
+  outline: 2px solid var(--uta-focus);
+  outline-offset: 2px;
+}
+
+.choice-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background-color: var(--uta-surface);
+  color: var(--uta-accent-read);
+  flex-shrink: 0;
+}
+
+.choice-copy {
+  min-width: 0;
+}
+
+.choice-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.choice-desc {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--uta-secondary);
+}
+
+.settings-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.uta-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 15px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--uta-transition-fast),
+    border-color var(--uta-transition-fast),
+    opacity var(--uta-transition-fast),
+    transform var(--uta-transition-fast),
+    box-shadow var(--uta-transition-fast);
+}
+
+.uta-button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.uta-button:focus-visible {
+  outline: 2px solid var(--uta-focus);
+  outline-offset: 2px;
+}
+
+.uta-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.uta-button.is-primary {
+  background-color: var(--uta-accent);
+  color: var(--uta-accent-text);
+}
+
+.uta-button.is-primary:hover:not(:disabled) {
+  background-color: var(--uta-accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px -2px var(--uta-focus-ring);
+}
+
+.uta-button.is-secondary {
+  background-color: var(--uta-canvas);
+  border-color: var(--uta-separator);
+  color: var(--uta-ink);
+}
+
+.uta-button.is-secondary:hover:not(:disabled) {
+  background-color: var(--uta-surface);
+  border-color: var(--uta-muted);
+}
+
+.uta-button.is-ghost {
+  background: transparent;
+  color: var(--uta-secondary);
+}
+
+.uta-button.is-ghost:hover:not(:disabled) {
+  color: var(--uta-ink);
+  background-color: var(--uta-canvas);
+}
+
+.status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--uta-secondary);
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background-color: var(--uta-muted);
+  flex-shrink: 0;
+}
+
+.status-dot.is-on {
+  background-color: var(--uta-success);
+}
+
+.status-dot.is-warn {
+  background-color: var(--uta-warning);
+}
+
+.settings-empty {
+  padding: 20px;
+  border: 1px dashed var(--uta-separator);
+  border-radius: 12px;
+  color: var(--uta-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+@media (max-width: 800px) {
+  .settings-panel {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 620px) {
+  .settings-stack {
+    gap: 14px;
+  }
+  .panel-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .choice-grid {
+    grid-template-columns: 1fr;
+  }
+  .segmented {
+    display: flex;
+    width: 100%;
+  }
+  .segmented-btn {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-stack:not([hidden]),
+  .settings-panel,
+  .uta-button {
+    animation: none;
+    transition: none;
+  }
+}

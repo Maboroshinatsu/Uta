@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "modelId": "hiyori_pro_t11",
+  "name": "Hiyori Pro",
+  "idleMotions": ["Idle"],
+  "lipSync": {
+    "mouthOpenParam": "ParamMouthOpenY",
+    "gain": 1.0
+  },
+  "emotions": {
+    "happy": {
+      "motion": { "group": "Tap", "index": 1 },
+      "parameters": {
+        "ParamEyeLSmile": 1,
+        "ParamEyeRSmile": 1,
+        "ParamMouthForm": 1
+      }
+    },
+    "sad": {
+      "motion": { "group": "FlickDown", "index": 0 },
+      "parameters": {
+        "ParamMouthForm": -1,
+        "ParamBrowLY": -0.5,
+        "ParamBrowRY": -0.5
+      }
+    },
+    "angry": {
+      "motion": { "group": "Flick@Body", "index": 0 },
+      "parameters": {
+        "ParamMouthForm": -0.7,
+        "ParamBrowLAngle": -0.8,
+        "ParamBrowRAngle": 0.8
+      }
+    },
+    "surprise": {
+      "motion": { "group": "Flick", "index": 0 },
+      "parameters": {
+        "ParamEyeLOpen": 1,
+        "ParamEyeROpen": 1
+      }
+    },
+    "thinking": {
+      "motion": { "group": "FlickUp", "index": 0 },
+      "parameters": {
+        "ParamMouthForm": 0,
+        "ParamBrowLY": 0.3,
+        "ParamBrowRY": 0.3
+      }
+    },
+    "shy": {
+      "motion": { "group": "Tap@Body", "index": 0 },
+      "parameters": {
+        "ParamCheek": 1,
+        "ParamEyeLSmile": 0.7,
+        "ParamEyeRSmile": 0.7,
+        "ParamMouthForm": 0.5
+      }
+    },
+    "curious": {
+      "motion": { "group": "FlickUp", "index": 0 },
+      "parameters": {
+        "ParamMouthForm": 0.3,
+        "ParamBrowLY": 0.4,
+        "ParamBrowRY": 0.4
+      }
+    },
+    "neutral": {
+      "parameters": {
+        "ParamCheek": 0,
+        "ParamEyeLSmile": 0,
+        "ParamEyeRSmile": 0,
+        "ParamEyeLOpen": 1,
+        "ParamEyeROpen": 1,
+        "ParamMouthForm": 0,
+        "ParamBrowLY": 0,
+        "ParamBrowRY": 0,
+        "ParamBrowLAngle": 0,
+        "ParamBrowRAngle": 0
+      }
+    },
+    "idle": {
+      "parameters": {
+        "ParamCheek": 0,
+        "ParamEyeLSmile": 0,
+        "ParamEyeRSmile": 0,
+        "ParamEyeLOpen": 1,
+        "ParamEyeROpen": 1,
+        "ParamMouthForm": 0,
+        "ParamBrowLY": 0,
+        "ParamBrowRY": 0,
+        "ParamBrowLAngle": 0,
+        "ParamBrowRAngle": 0
+      }
+    }
+  },
+  "animations": {
+    "wave": {
+      "motion": { "group": "Tap", "index": 1 }
+    },
+    "jump": {
+      "motion": { "group": "Tap", "index": 0 }
+    },
+    "spin": {
+      "motion": { "group": "Flick", "index": 0 }
+    },
+    "sit": {
+      "motion": { "group": "FlickDown", "index": 0 }
+    },
+    "sleep": {
+      "motion": { "group": "FlickDown", "index": 0 }
+    },
+    "wake": {
+      "motion": { "group": "FlickUp", "index": 0 }
+    },
+    "dance": {
+      "motion": { "group": "Tap@Body", "index": 0 }
+    },
+    "cheer": {
+      "motion": { "group": "Tap", "index": 1 }
+    }
+  }
+}

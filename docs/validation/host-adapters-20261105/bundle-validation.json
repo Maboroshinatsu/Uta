@@ -1,0 +1,28 @@
+{
+  "selfContained": [
+    "claude-code",
+    "zcode",
+    "codex",
+    "qoder",
+    "deepseek-harness",
+    "opencode"
+  ],
+  "hostValidation": {
+    "Claude manifest": {
+      "ok": true,
+      "exit": 0
+    },
+    "ZCode manifest": {
+      "ok": true,
+      "exit": 0
+    },
+    "Codex local marketplace": {
+      "ok": true,
+      "exit": 0
+    },
+    "Codex isolated plugin install": {
+      "ok": true,
+      "exit": 0
+    }
+  }
+}

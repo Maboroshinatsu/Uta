@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "uta-deskpet": {
+      "command": "node",
+      "args": ["${ZCODE_PLUGIN_ROOT}/runtime/deskpet-mcp.mjs"],
+      "env": {
+        "UTA_HOST": "zcode"
+      }
+    }
+  }
+}

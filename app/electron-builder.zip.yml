@@ -1,0 +1,14 @@
+extends: ./electron-builder.yml
+
+extraFiles:
+  - from: scripts/start-candidate.bat
+    to: Try-Uta.bat
+
+win:
+  target:
+    - target: zip
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-win-${arch}.zip
+
+electronDist: node_modules/electron/dist

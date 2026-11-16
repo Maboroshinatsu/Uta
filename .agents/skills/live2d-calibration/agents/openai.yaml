@@ -1,0 +1,4 @@
+interface:
+  display_name: "Live2D 视觉标定"
+  short_description: "通过真实参数试验、动态画面对照与逐轮修正，标定并编排 Uta 角色动作"
+  default_prompt: "用 $live2d-calibration 标定当前 Uta 模型的有效参数，再逐轮调试一个自然动作。"

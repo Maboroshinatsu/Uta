@@ -1,0 +1,18 @@
+{
+  "readCorrectTitle": true,
+  "dailyTypography": {
+    "count": 8,
+    "mismatched": []
+  },
+  "reminderCreatedFromPet": true,
+  "previousSessionShowsOwnTitle": true,
+  "settingsTypography": {
+    "count": 5,
+    "mismatched": []
+  },
+  "singleReminderCard": true,
+  "savedPresetVisible": true,
+  "connectionsShowTitles": true,
+  "historyShowsTitles": true,
+  "approvalShowsTitle": true
+}

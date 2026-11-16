@@ -1,0 +1,25 @@
+{
+  "quiet": {
+    "idle": true,
+    "narration": false
+  },
+  "hoverEntered": true,
+  "hoverExited": true,
+  "autoWorkStarted": true,
+  "reducedWorkStopped": true,
+  "reducedWorkSkipped": true,
+  "savedMode": "循环往复",
+  "loopActive": true,
+  "wholeMotionVisible": true,
+  "exportRejected": {
+    "status": "error",
+    "message": "当前预设依赖原生动作（Idle），无法完整导出为单个 motion3.json。请先保存为用户预设，再使用角色页的「用户预设 → 导出」。"
+  },
+  "detached": true,
+  "staticEmotion": {
+    "emotion": "happy",
+    "image": "happy.svg"
+  },
+  "finished": true,
+  "errors": []
+}

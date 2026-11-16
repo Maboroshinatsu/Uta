@@ -1,0 +1,117 @@
+{
+  "description": "Uta desktop pet state mirror: maps Qoder lifecycle events to character states. Fail-open, never blocks the agent.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-thinking",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-tool-running",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-tool-done",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-tool-failed",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-completed",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-session-end",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "async": false,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${QODER_PLUGIN_ROOT}/runtime/uta-hook.mjs"],
+            "name": "uta-deskpet-permission-approval",
+            "timeout": 75
+          }
+        ]
+      }
+    ]
+  }
+}

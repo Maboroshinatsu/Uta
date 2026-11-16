@@ -1,0 +1,12 @@
+extends: ./electron-builder.yml
+
+extraFiles:
+  - from: ../docs/releases/SHARE-README.md
+    to: README-FIRST.md
+  - from: ../docs/releases/DS-MODEL-NOTICE.md
+    to: DS-MODEL-NOTICE.md
+
+win:
+  artifactName: ${productName}-${version}-share-win-${arch}.zip
+
+electronDist: node_modules/electron/dist

@@ -1,0 +1,13 @@
+:root {
+  --uta-font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --uta-font-mono: "Cascadia Code", "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+}
+
+html, body {
+  font-family: var(--uta-font-sans);
+}
+
+:where(button, input, textarea, select, option, optgroup),
+input::-webkit-datetime-edit {
+  font-family: inherit;
+}

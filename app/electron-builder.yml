@@ -1,0 +1,84 @@
+appId: com.maboroshinatsu.uta
+productName: Uta
+copyright: Copyright © 2026 Maboroshinatsu
+
+directories:
+  output: release
+
+files:
+  - out/**/*
+  - package.json
+  - "!node_modules/**/*"
+  - "!out/renderer/models/**/*.can3"
+  - "!out/renderer/models/**/*.cmo3"
+
+extraFiles:
+  - from: ../LICENSE
+    to: LICENSE-Uta.txt
+  - from: ../THIRD_PARTY_LICENSES.md
+    to: THIRD_PARTY_LICENSES.md
+  - from: build/THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
+  - from: src/renderer/public/models/hiyori_pro_zh/hiyori_pro_zh/ReadMe.txt
+    to: HIYORI-README.txt
+  - from: ../docs/releases/ZIP-FIRST-READ.md
+    to: FIRST-READ.md
+  - from: ../maibot-adapter/README.md
+    to: MAIBOT-ADAPTER.md
+  - from: scripts/pets
+    to: Pets
+
+asar: true
+npmRebuild: false
+compression: normal
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: src/renderer/public/icon.ico
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Uta
+  uninstallDisplayName: Uta
+  deleteAppDataOnUninstall: false
+
+publish: null
+
+extraResources:
+  - from: ../plugin/dist/codex-marketplace
+    to: uta-plugins/codex-marketplace
+  - from: ../plugin/dist/deepseek-harness
+    to: uta-plugins/deepseek-harness
+  - from: ../plugin/dist/uta-qoder-plugin.zip
+    to: uta-plugins/uta-qoder-plugin.zip
+  - from: ../plugin/dist/uta-qoder-plugin
+    to: uta-plugins/uta-qoder-plugin
+  - from: ../plugin/dist/uta-antigravity-plugin.zip
+    to: uta-plugins/uta-antigravity-plugin.zip
+  - from: ../plugin/dist/uta-antigravity-plugin
+    to: uta-plugins/uta-antigravity-plugin
+  - from: ../plugin/dist/claude-marketplace
+    to: uta-plugins/claude-marketplace
+  - from: ../plugin/dist/zcode-marketplace
+    to: uta-plugins/zcode-marketplace
+  - from: ../plugin/dist/uta-opencode-plugin
+    to: uta-plugins/uta-opencode-plugin
+  - from: ../plugin/HOST-INSTALL.md
+    to: uta-plugins/HOST-INSTALL.md
+  - from: ../maibot-adapter
+    to: maibot-adapter
+    filter:
+      - "**/*"
+      - "!tests/**/*"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
+      - "!.test-tmp/**/*"

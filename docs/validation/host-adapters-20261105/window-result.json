@@ -1,0 +1,65 @@
+{
+  "hosts": [
+    {
+      "host": "deepseek-harness",
+      "origin": "controlled protocol in real Uta window",
+      "thinkingVisible": true,
+      "foreignHostRejected": true,
+      "approvalVisible": true,
+      "approvalRoundTrip": true,
+      "replyVisible": true,
+      "nativeBridgeExactTarget": true
+    },
+    {
+      "host": "codex",
+      "origin": "real shared hook subprocess in real Uta window",
+      "thinkingVisible": true,
+      "foreignHostRejected": true,
+      "approvalVisible": true,
+      "approvalRoundTrip": true,
+      "replyVisible": true
+    },
+    {
+      "host": "claude-code",
+      "origin": "real shared hook subprocess in real Uta window",
+      "thinkingVisible": true,
+      "foreignHostRejected": true,
+      "approvalVisible": true,
+      "approvalRoundTrip": true,
+      "replyVisible": true
+    },
+    {
+      "host": "zcode",
+      "origin": "real shared hook subprocess in real Uta window",
+      "thinkingVisible": true,
+      "foreignHostRejected": true,
+      "approvalVisible": true,
+      "approvalRoundTrip": true,
+      "replyVisible": true
+    },
+    {
+      "host": "qoder",
+      "origin": "real shared hook subprocess in real Uta window",
+      "thinkingVisible": true,
+      "foreignHostRejected": true,
+      "approvalVisible": true,
+      "approvalRoundTrip": true,
+      "replyVisible": true,
+      "desktopInputNotAdvertised": true
+    },
+    {
+      "host": "opencode",
+      "origin": "controlled protocol in real Uta window",
+      "thinkingVisible": true,
+      "foreignHostRejected": true,
+      "approvalVisible": true,
+      "approvalRoundTrip": true,
+      "replyVisible": true,
+      "nativeBridgeExactTarget": true
+    }
+  ],
+  "boundHostAlias": true,
+  "realModelTurns": false,
+  "finished": true,
+  "errors": []
+}

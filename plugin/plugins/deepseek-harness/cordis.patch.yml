@@ -1,0 +1,18 @@
+# ============================================================================
+# @uta/deepseek-harness-plugin —— DSH bundle patch
+# ============================================================================
+# DSH 启动时按 bundle 层栈叠加各插件 patch，本文件把 Uta 桌宠插件插入
+# profile 的配置树。
+#
+# 格式要求：顶层必须是 YAML 数组，元素为 loader patch entry
+# （@deepseek-ai/cordis-plugin-include 的 PatchOptions）。
+# 相对路径的 name 会被解析为相对本文件的 file:// URL。
+#
+# 安装方式（挂到你实际使用的那个 profile；本机桌面版 GUI 跑的是 desktop）：
+#   dsh plugin --profile desktop add d:/Frankenstein/Uta/plugin/plugins/deepseek-harness
+#   dsh plugin --profile default add d:/Frankenstein/Uta/plugin/plugins/deepseek-harness
+# ============================================================================
+
+- insert:
+    - id: uta-deskpet
+      name: '@uta/deepseek-harness-plugin'

@@ -1,0 +1,9 @@
+{
+  "name": "uta-deskpet",
+  "displayName": "Uta Desktop Companion",
+  "version": "0.1.12",
+  "description": "把 Qoder 的工作状态映射到 Uta 桌宠，并提供角色表现工具（气泡、情绪、动作）。",
+  "author": {
+    "name": "Maboroshinatsu"
+  }
+}

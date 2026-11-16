@@ -1,0 +1,20 @@
+{
+  "name": "deskpet",
+  "interface": {
+    "displayName": "MaiBot Deskpet"
+  },
+  "plugins": [
+    {
+      "name": "deskpet-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/deskpet-mcp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

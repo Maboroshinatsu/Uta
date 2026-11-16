@@ -1,0 +1,1873 @@
+> 归档说明：这是 2026-11-03 工作区根目录 d:/Frankenstein/HANDOFF.md 的完整副本（该文件不受 git 管辖，改动不可逆，故先入版本库保全）。
+> 其内容当时已被 Uta 条目接管；Uta 的受版本控制交接以 docs/workflow/ 为准。
+
+# Uta 修复动作打断抽搐、精准解耦动作轨道与分镜表情及闭环生命周期释放交接（2026-11-03）
+
+## 1. 事项与完成清单
+- **[BUG-ANIMATION-ORCHESTRATION: 修复动作打断瞬态硬归零抽搐、精准解耦动作轨道与分镜表情、闭环动作层释放与渲染时长动态匹配]**：
+  - **背景与原因**：
+    1. 上一轮提交为了防止动作位姿叠加，粗暴传参 { parameters: {} }，导致所有带动作预设的分镜表情参数（眼睛、嘴型、眉毛微调、道具滑块）全部丢失，工坊分镜编辑参数在实机播放时也完全不生效；
+    2. 上一轮提交删除了打断时的 stopMotion，导致连续右键或切换动作时底层动作未停止，多套动作曲线重叠打架；而中午提交加入的 stopMotion 带有硬归零导致抽搐；
+    3. 动作层兜底拉长至 8 秒且缺乏主动释放机制，预设在 5.6 秒演完后待机动作（Idle motion）被阻断拒绝，桌宠原地僵直定格数秒；
+    4. 右键随机预设中全帧率渲染唤醒时间硬编码为 3000ms，大肥鱼动作长达 5.6 秒，导致鼠标离开后后半段进入按需降帧。
+  - **修复实现**：
+    1. **分镜参数精准解耦**（usePresetController.ts）：
+       - 废弃粗暴抹除 { parameters: {} }；
+       - 通过 getDafishHappyOwnedParameters(store.live2dModel) 精准获取动作轨道占用的位姿参数集合，仅过滤掉已被 60FPS 曲线接管的参数；
+       - 其余分镜步骤的面部微表情、嘴型、道具等参数 100% 完整保留并正常下发；
+       - 工坊单步审查（preset.preview）保持 100% 原始参数呈现。
+    2. **动作打断与平滑淡入接管**（useMotionPriority.ts & usePresetController.ts）：
+       - 控制器打断动作时显式调用 deps.stopMotion?.({ resetTransientParams: false })，停止底层 MotionManager 播放时钟，但绝不执行瞬态参数硬归零；
+       - 由 Live2D 原生的 adeInTime 自然平滑过渡接管到新动作，彻底消除打断抽搐；
+       - stopMotion 保持无参调用时默认 	rue 兼容性。
+    3. **动作层优先级生命周期闭环**（useMotionPriority.ts & DeskpetStage.vue）：
+       - 增加 
+eleaseMotionLayer 接口；
+       - 在预设步骤全部执行完毕回退待机（
+evertToActiveHoldPreset）及用户打断序列时，显式释放 currentLayer；
+       - 待机呼吸和微动作立即无缝自然恢复，彻底消除动作播完后的僵死定格。
+    4. **滑块复原平滑化与渲染时长动态匹配**（usePresetController.ts & DeskpetStage.vue）：
+       - 序列取消时的滑块复位改用 REVERT_TRANSITION_MS（320ms）平滑过渡，杜绝 0ms 瞬间跳跃；
+       - 右键随机预设根据所选预设的实际时长动态透传 
+oteRenderActivity(duration + 500)，保障动作全程 60FPS 不掉帧。
+    5. **自动化测试与质量守卫**：
+       - pp/tests/preset-controller-smoothness.test.cjs 补充 4 项回归测试全部通过；
+       - 全量 1290 项单元测试（1284 pass, 0 fail, 6 skip）全部通过；
+       - 插件 125 项测试全部通过；
+       - TypeScript（Node + Web）类型检查 0 错误。
+
+## 2. 现场状态
+- **Git HEAD**: 准备提交
+- **分支状态**: main
+- **测试状态**: 1290 tests, 1284 passed, 0 failed, 6 skipped
+- **未提交工作区**: DeskpetStage.vue, useMotionPriority.ts, usePresetController.ts, preset-controller-smoothness.test.cjs, HANDOFF.md
+- **下一步建议**: 实机体验右键随机动作、连续右键快速切动作与动作播完后待机恢复，确认动作表情自然、无抽搐无僵滞。
+
+---
+
+# Uta 宿主待办联动会话重构与Codex目标适配交接（2026-11-03）
+
+## 1. 事项与完成清单
+
+- **[FEAT-TODO-SESSION-CODEX-SYNC: 宿主待办联动会话重构与Codex目标适配]**：
+  - **背景与原因**：
+    1. 此前宿主待办与工作目录（CWD / 项目文件夹）强绑定，存在项目切换下拉框；但在桌宠与宿主的通信架构中，连接是基于活动会话（Session ID）路由的，导致出现“连接按会话走，待办按项目走”的不一致；
+    2. Codex 原生使用 `create_goal` / `get_goal` 等工具并在本地 `%USERPROFILE%\.codex\goals_1.sqlite`（`thread_goals` 表）中记录目标与步骤，此前插件未监听目标工具，无法自动提取 Codex 创建的步骤清单；
+    3. Codex 工作期间仅在工具调用时触发 Hook，缺乏让宿主模型显式更新当前计划的 MCP 工具。
+  - **重构与适配实现**：
+    1. **Codex 原生目标直接读取与主进程状态注入**：
+       - 新建 [`app/src/main/codex-goals.ts`](file:///D:/Frankenstein/Uta/app/src/main/codex-goals.ts)，实现 `parseCodexObjective`（支持多行目标解析、编号与选框提取）与 `readCodexSessionGoal`（使用 Node 原生 `node:sqlite` 的 `DatabaseSync` 模块直接以只读方式读取 `goals_1.sqlite` 中当前线程的目标与步骤）；
+       - 更新 [`app/src/shared/todo-contracts.ts`](file:///D:/Frankenstein/Uta/app/src/shared/todo-contracts.ts)，在 `HostPlanSnapshot` 契约中扩展可选的 `title?: string`；
+       - 更新 [`app/src/main/todo-store.ts`](file:///D:/Frankenstein/Uta/app/src/main/todo-store.ts)，当活动宿主为 Codex 且具备活动会话时，在 `state()` 中实时联动同步该会话的最新目标快照；
+       - 更新 [`app/src/main/runtime-commands.ts`](file:///D:/Frankenstein/Uta/app/src/main/runtime-commands.ts) 与 [`app/src/main/index.ts`](file:///D:/Frankenstein/Uta/app/src/main/index.ts)，在 `todo_snapshot` 指令中完整传递并净化 `title` 字段。
+    2. **插件 Hook 与 MCP 协议适配**：
+       - 更新 [`plugin/shared/uta-todo.mjs`](file:///D:/Frankenstein/Uta/plugin/shared/uta-todo.mjs)，将 `create_goal`、`update_goal`、`get_goal`、`set_goal` 纳入待办工具白名单，实现 `parseObjectiveToItems` 并提取目标 `title`；
+       - 更新 [`plugin/shared/uta-narration.mjs`](file:///D:/Frankenstein/Uta/plugin/shared/uta-narration.mjs)，将目标/计划/待办类工具归纳为 `defining`（规划梳理）解说意图；
+       - 更新 [`plugin/plugins/deskpet-mcp/server.mjs`](file:///D:/Frankenstein/Uta/plugin/plugins/deskpet-mcp/server.mjs)，新增 `deskpet_update_plan` 工具，使 Codex 等宿主模型能够显式向桌宠推送目标与步骤清单；
+       - 执行插件打包脚本 `npm run plugin:build`，同步更新所有宿主（Codex / Claude / ZCode / Antigravity / Qoder / DSH）的 dist 产物。
+    3. **前端视图重构为纯粹的“宿主会话任务与目标”**：
+       - **伴随浮窗 [`app/src/renderer/components/TodoBoard.vue`](file:///D:/Frankenstein/Uta/app/src/renderer/components/TodoBoard.vue)**：彻底移除项目文件夹下拉框与本地项目待办列表；宿主通道呈现为清晰的活动会话任务监控器，包含会话标识（`Codex · 会话 xxxxxxxx`）、目标标题卡片（`当前目标`）、步骤进度与状态列表（完成、进行中徽标、未完成），并提供无连接/无目标时的自适应空状态；
+       - **设置中心 [`app/src/renderer/settings-window/domains/TodoDomain.vue`](file:///D:/Frankenstein/Uta/app/src/renderer/settings-window/domains/TodoDomain.vue)**：左侧彻底重构为统一的“宿主会话任务与目标”面板，展示活动会话信息、目标卡片与进度条、只读步骤清单、以及包含平台/会话ID/工作目录/同步通道的元数据卡片；右侧保留日常待办与提醒表现配置。
+    4. **自动化测试与质量守卫**：
+       - `npm run test:plugin` 125 项测试全部通过；
+       - 单元测试与布局守卫（`todo-ui.test.cjs`、`layout-guards.test.cjs`、`confirm-action.test.cjs`、`color-tokens.test.cjs`）49 项测试全部通过；
+       - `npm run typecheck`（Node + Web）0 错误通过；
+       - 全量单元测试套件 1286 项测试全部通过（1280 pass, 0 fail, 6 skip）。
+
+## 2. 现场状态
+- **Git HEAD**: 准备提交
+- **分支状态**: main
+- **测试状态**: 1286 tests, 1280 passed, 0 failed, 6 skipped
+
+---
+
+# Uta 还原待办界面至去掉宿主栏前原版UI设计交接（2026-11-03）
+
+## 1. 事项与完成清单
+
+- **[FEAT-TODO-RESTORE-ORIGINAL-UI: 全面还原待办浮窗与设置页至去掉宿主栏前的原版高保真UI]**：
+  - **背景与原因**：此前重构恢复日常与宿主双分类时，采用了简化版单列折叠及临时样式，丢失了原本成熟的视觉体系。用户要求参考去除宿主栏之前的成熟版本（Commit `aa67432`）进行高保真复原。
+  - **复原与改造实现**：
+    1. **桌宠待办伴随浮窗 (`TodoBoard.vue`)**：
+       - 完整恢复 28px 圆角胶囊切换栏（`.todo-board-lanes`），包含 `var(--dp-input-bg)` 胶囊槽、微投影激活态与日常到点微标（`.todo-board-due`）；
+       - 宿主通道恢复顶部工作区/未识别项目切换下拉框（`.todo-board-select`）；
+       - 宿主通道上部展示宿主计划模块（`.todo-board-group`，包含完成比例 `planProgress`、发光脉冲点/对勾状态 `.todo-board-state` 与只读任务文本）；
+       - 宿主通道下部展示项目待办模块（包含圆角方形复选框 `.todo-board-check`、划线完成态、带二次确认的删除按钮 `.todo-board-delete`、以及底部新增输入行 `.todo-board-add`）；
+       - 日常通道渲染精简版 `<DailyTodoList compact />`；
+       - 自包含绝对定位（`z-index: 68`）、键盘 Esc 两次退出焦点保护，不包含多余的跳转设置底部按钮。
+    2. **设置中心待办设置页 (`TodoDomain.vue`)**：
+       - 完整恢复双列网格仪表盘布局（`.todo-lanes`，大屏双列，窄屏响应式自适应）；
+       - **左列（宿主与项目待办）**：
+         - 当前项目选择卡片（下拉切换、未识别待办关联向导）；
+         - 宿主计划只读镜像卡片（`.todo-readonly-list`，状态圆点与标签）；
+         - 项目待办卡片（新增输入表单、任务行内联编辑、删除二次确认、一键清理已完成，彻底移除废弃的发给宿主反向发送预览及按钮）；
+       - **右列（日常待办与提醒表现）**：
+         - 日常待办卡片（`<DailyTodoList />`）；
+         - 待办通知与桌宠表现卡片（到点播放提示音 Toggle、`REMINDER_SOUND_OPTIONS` 风格选择、试听按钮、桌宠提醒表现预设选择、提醒气泡停留时长滑块）。
+    3. **自动化测试守卫与验证**：
+       - 单元测试 [todo-ui.test.cjs](file:///D:/Frankenstein/Uta/app/tests/todo-ui.test.cjs) 全部通过；
+       - 布局守卫 [layout-guards.test.cjs](file:///D:/Frankenstein/Uta/app/tests/layout-guards.test.cjs) 全部通过；
+       - `npm run typecheck`（Node + Web）0 错误通过；
+       - 全量单元测试套件 1286 项测试全部通过（1280 pass, 0 fail, 6 skip）。
+
+## 2. 现场状态
+- **Git HEAD**: 准备提交
+- **分支状态**: main
+- **测试状态**: 1286 tests, 1280 passed, 0 failed, 6 skipped
+
+---
+
+# Uta 恢复日常待办与宿主计划双通道分类并清理向宿主发送废弃接口交接（2026-11-03）
+
+## 1. 事项与完成清单
+
+- **[FEAT-TODO-DUAL-LANE: 恢复日常与宿主双通道分类，彻底清理向宿主发送待办废弃接口]**：
+  - **背景与原因**：
+    1. 审查项 `[P2: 待办系统只拆了一半]` 指出：前端此前不再展示项目/宿主待办，但主进程仍在接收并持久化宿主计划（`hostPlan`），预加载层也还暴露着 `todoSendToHost` / `dailySendToHost` 两个已无人调用的接口；
+    2. 用户明确要求保留“日常待办”与“宿主计划”的分类区分，但宿主计划作为外部 Agent（Claude Code / OpenCode / DeepSeek Harness）下发任务步骤的只读镜像展示，无须保留反向发送的死逻辑；
+    3. 桌宠浮窗 `TodoBoard.vue` 与设置中心 `TodoDomain.vue` 均需要恢复双通道分类切换。
+  - **修复与改造实现**：
+    1. **彻底清理废弃的向宿主发送反向接口**：
+       - `app/src/preload/index.ts`：移除 `todoSendToHost` 与 `dailySendToHost` 的 API 暴露；
+       - `app/src/renderer/env.d.ts`：同步移除 `UtaAPI` 中对应的函数类型签名；
+       - `app/src/main/index.ts`：移除 `todo-send-to-host` 与 `daily-send-to-host` 的 IPC Handle 监听，并清理了无用的导入项（`dispatchDailySend`, `prepareDailySend`, `todoProjectMatchesSession`）。
+    2. **桌宠伴随浮窗双分类实现 (`TodoBoard.vue`)**：
+       - 顶部增设 `.todo-board-lanes` 分类切换按钮组：“日常”（显示未打勾待办数量角标）与“宿主”（显示活跃/未完成任务数角标）；
+       - 切换至“日常”通道时，渲染 `<DailyTodoList compact />`；
+       - 切换至“宿主”通道时，只读渲染当前宿主（或上次会话）下发的计划项（`hostPlan`），包括状态图标（已完成对勾、进行中脉冲圆点、待处理圆点）、步骤文本、状态标签与宿主显示名称，当无任务时展示空状态；
+       - 完整保留自包含样式、键盘 Esc 焦点退出与关闭防护。
+    3. **设置中心双分类展示 (`TodoDomain.vue`)**：
+       - 顶部增设“日常待办”与“宿主计划”通道切换器；
+       - “日常待办”下嵌入完整功能版 `<DailyTodoList />`；
+       - “宿主计划”下展示只读的宿主任务进度条、会话状态与任务列表；
+       - 底部完整保留待办提醒设置（提示音开关、提示音样式、提醒动效预设、气泡持续时间与一键清理已完成）。
+    4. **测试断言同步更新与验证**：
+       - 更新 `app/tests/todo-ui.test.cjs`，明确校验 `todo-board-lanes` 结构、`日常` 与 `宿主计划` 切换、以及废弃发送接口的彻底移除；
+       - 补齐 `TodoBoard.vue` 内部 `onKeydown` 的无障碍与样式断言；
+       - `npm run typecheck`（Node + Web）0 错误通过；
+       - 全量单元测试套件 1286 项测试全部通过（1280 pass, 0 fail, 6 skip）。
+
+## 2. 现场状态
+- **Git HEAD**: 准备提交
+- **分支状态**: main
+- **测试状态**: 1286 tests, 1280 passed, 0 failed, 6 skipped
+
+---
+
+# Uta 修复待办浮窗样式缺失导致点击不弹出与设置页清单回填交接（2026-11-03）
+
+## 1. 事项与完成清单
+
+- **[BUG-TODO-BOARD-MOUNT: 修复待办浮窗样式缺失导致点击按钮无法弹出与设置页清单回填]**：
+  - **背景与原因**：用户反馈点击桌宠窗口上的待办按钮后没有任何待办页面弹出。深度排查发现根本原因：
+    1. 早期浮窗通用样式 `.companion-window`、定位规则（`pop-left` / `pop-right` / `align-bottom` / `align-top`）、毛玻璃面板背景与进出场动画（`companion-slide-*`）原本依赖 `settings-panel.css`；
+    2. 在上轮精简桌宠浮窗改造中，桌宠端将 `SettingsPanel.vue`（引入了该 CSS）替换为了自主封装样式的 `QuickSettingsPanel.vue`，导致桌宠窗口失去了全局伴随浮窗的基础样式定义；
+    3. `TodoBoard.vue` 仅声明了内部业务局部样式，缺少了最核心的 `position: absolute`、`z-index: 68`、面板底色与定位规则，导致点击待办按钮即使触发了 `todoPanelOpen = true`，该组件也仅作为普通静态流元素坍塌于画布容器溢出区底部，完全透明且不可见，造成“点击毫无反应”的现象；
+    4. 此外，设置中心（`TodoDomain.vue`）因上轮误将整个列表剥离，导致用户在设置页中也无法直接看到待办内容。
+  - **修复实现**：
+    1. **自包含补全伴随浮窗样式 (`TodoBoard.vue`)**：
+       - 在 `TodoBoard.vue` 的 scoped 样式中完整自包含补齐 `.companion-window` 定位（`position: absolute; z-index: 68; -webkit-app-region: no-drag;`）；
+       - 补齐面板主题底色（`background: var(--dp-panel-bg); border: 1px solid var(--dp-border); border-radius: 24px; box-shadow: var(--dp-shadow);`）；
+       - 补齐四向动态对齐坐标（`pop-left` / `pop-right` / `align-bottom` / `align-top`）；
+       - 补齐 `.comp-header`、`.comp-title`、`.comp-title-dot`、`.icon-close-btn` 与进出场缓动动效（`companion-slide-enter-active` / `leave-active` 等）；
+    2. **设置中心待办清单回填 (`TodoDomain.vue`)**：
+       - 在设置中心 `TodoDomain.vue` 顶部直接嵌入 `<DailyTodoList />`，让用户在设置中心内也能直观地查看、新增、编辑、提醒设置与打勾待办事项，与桌宠桌面小窗保持实时双向同步；
+    3. **自动化测试守卫 (`tests/todo-ui.test.cjs`)**：
+       - 补充断言严格校验 `TodoBoard.vue` 必须具备 `position: absolute` 及动画类，确保后续重构绝不再出现浮窗无样式坍塌不可见的问题。
+  - **验证结果**：
+    - `npm run typecheck` 0 错误；
+    - 全量单元测试套件 1286 项测试全部通过（1280 pass, 0 fail, 6 skip）。
+
+## 2. 现场状态
+- **Git Commit**: 准备提交
+- **分支状态**: main
+
+---
+
+# Uta 修复预设升级覆盖/多档裙装档位保持/TTS自动风格持久化/解绑宿主偏好/分镜导出校验交接（2026-11-03）
+
+## 1. 事项与完成清单
+
+- **[P1: 修复大肥鱼预设升级覆盖自定义动作]**：
+  - **背景与原因**：大肥鱼老旧预设升级函数 `purgeDafishLegacyPresets` 在更新到身体主导灵动预设时，直接用内置预设覆盖了整个 `presetsByModel[key]` 列表，导致用户自己制作并保存的自定义动作分镜在模型升级后被全量清空。
+  - **修复实现**：在 `app/src/renderer/stores/deskpet.ts` 中定义 `LEGACY_DAFISH_BUILTIN_IDS` 清单，在执行升级清理时过滤保留所有来源为 `user` 或非内置 ID 的自定义预设，与全新的身体主导灵动预设进行增量合并（`[...cleanPresets, ...userPresets]`），确保用户自定义分镜不丢失。
+
+- **[P2: 修复播放其他预设改变已保持的多档部件（如长短裙）档位]**：
+  - **背景与原因**：控制器在每轮预设步骤重新应用常驻与保持部件时使用 `'on'` 动作，而 `emotion-adapter.ts` 将未带具体档位参数的 `'on'` 错误实现为轮换到下一档 `(curIdx + 1) % stageCount`。导致用户保持短裙（第 1 档）后，每播放一个无关表情，裙装就被自动切回长裙（第 0 档）。
+  - **修复实现**：
+    1. 在 `app/src/renderer/composables/usePresetController.ts` 中，收集 `persistentSpecs` 与 `heldSpecs` 时检测多档部件（`stages.length > 0`），自动附带当前档位标识（如 `${c.id}:${c.currentStageIndex ?? 0}`）；
+    2. 在 `app/src/renderer/services/live2d/emotion-adapter.ts` 的 `applyControlActionToList` 中重构多档位逻辑：当 `effectiveAction === 'on'` 时，若部件已处于开启状态，严格维持当前已在档位 `curIdx` 不变，彻底杜绝轮换切档；当指定档位时，显式将 `nextActive` 设为 `true`，避免因与默认档位相同而被错误关停或解绑。
+
+- **[P2: 修复TTS自动风格关闭后不能稳定保留与跨窗口同步遗漏]**：
+  - **背景与原因**：设置中心新增的 `ttsAutoStyleFromHost` 开关存入了 `localStorage`，但 `deskpet.ts` 中的 `VOICE_SERVICE_KEYS` 白名单未收录该字段，且 `loadUiState` 仅筛选 `typeof service[key] === 'string'`，丢弃了布尔型开关，导致规范化加载时被回退为默认的 `true` 并重新覆盖写入；此外，`pet-bridge.ts` 的跨窗口监听列表中未包含该属性，单独切换开关不会通知桌宠重载。
+  - **修复实现**：
+    1. 在 `app/src/renderer/stores/deskpet.ts` 中将 `ttsAutoStyleFromHost` 加入 `VOICE_SERVICE_KEYS`，并在 `loadUiState` 投影映射中支持 `boolean` 类型读取；
+    2. 在 `app/src/renderer/settings-window/pet-bridge.ts` 的 `watch` 数组中加入 `store.ttsAutoStyleFromHost`，使单独切换该开关时通过防抖触发向桌宠的 `reload-settings`。
+
+- **[P2: 修复解除宿主绑定后仍读到旧宿主快照]**：
+  - **背景与原因**：在解除宿主绑定后，`onPetBindingChanged` 将 `dynamicBoundHost` 设为 `null`，导致后续调用 `boundHostPreference()` 时回退读取 `window.utaAPI.petBinding.binding.hostId`（启动时由 contextBridge 序列化的旧快照 `codex`），出现“当前适配器为 fake，偏好却读为 codex”的状态撕裂，重新加载窗口时又可能误切回旧宿主。
+  - **修复实现**：
+    1. 在 `app/src/renderer/services/adapters/active.ts` 中，当解除绑定（`!nextHost`）或手动设置独立运行模式时，将 `dynamicBoundHost` 显式设为 `'standalone'`；
+    2. 在 `boundHostPreference()` 中，若 `dynamicBoundHost` 为 `'standalone'` 或 `'fake'`、或本地存储记录为 `'standalone'` 时直接返回 `'standalone'`，杜绝穿透回退至 preload 启动时残留的旧快照；
+    3. 在 `DeskpetStage.vue` 的 `switchPreference` 中，切换为 `standalone` 时同步调用 `setBoundHostPreference('standalone')` 与 `switchActiveHost('fake')`。
+
+- **[P2: 修复导出motion3时静默丢失分镜原生动作]**：
+  - **背景与原因**：预设工坊每步支持绑定模型原生动作，但 `motion-exporter.ts` 仅采样并导出了参数与部件图层，完全忽略了步骤中的 `step.motion`，导致含原生动作的分镜静默导出为缺少核心动作的平坦曲线。
+  - **修复实现**：
+    1. 在 `app/src/renderer/services/live2d/motion-exporter.ts` 中增加分镜动作前置校验：若分镜序列中包含绑定的原生动作，抛出明确错误并列出涉及动作名称，阻止导出不完整的空曲线；
+    2. 在 `app/src/renderer/components/SettingsPanel.vue` 的 `exportEditingSequenceToMotion3` 中增加前置检查与异常捕获，在 UI 界面友好提示：“当前分镜包含绑定的原生动作（...），导出器暂不支持将原生动作混流导出为单一 motion3.json。请移除原生动作绑定后重试。”
+
+## 2. 现场状态与验证
+
+- **自动化测试**：
+  - 新增专用单元测试 `app/tests/review-fixes-batch.test.cjs`，5 项断言全部一次性通过；
+  - 补充 `app/tests/motion-exporter.test.cjs` 原生动作导出阻断测试，验证通过；
+  - 修复 `app/tests/ui-style-alignment.test.cjs`，全量单测套件 1281 项测试全部通过（1275 pass, 0 fail, 6 skip）；
+- **TypeScript 静态检查**：`npm run typecheck`（Node + Web）0 错误通过；
+- **Git HEAD**：准备提交原子化 Commit。
+
+## 3. 待验证点与下一步建议
+
+- 启动桌宠与设置中心，验证自定义预设在模型重启/切换后的留存情况；
+- 保持短裙后在预设列表点击播放多个不同表情，确认裙装档位稳定保持在短裙；
+- 在设置中心切换 TTS 自动风格开关并刷新，确认 false 状态稳定保持且跨窗口即时同步；
+- 在连接面板或关于页解除宿主绑定，确认偏好与适配器均稳定在独立待命模式。
+
+---
+
+# Uta 修复工坊分镜点击部件状态未同步与桌宠阶段定格呈现交接（2026-11-02）
+
+## 1. 事项与完成清单
+- **[BUG-WORKSHOP-STEP-INSPECTION: 修复分镜点击未同步参数滑块、部件状态与桌宠阶段呈现]**：
+  - **背景与原因**：用户反馈在预设工坊点击对应分镜时，依然无法看到具体的参数和部件启用状态，且桌宠本身也不显示该阶段的状态。排查发现四个根因：
+    1. UI 部件状态未同步：`SettingsPanel.vue` 的 `selectEditingStep` 仅更新了滑块值，未同步更新 `store.modelControls` 的 `active` 与多段 `currentStageIndex`；
+    2. 参数折叠不可见且缺乏摘要：姿态参数与部件开关在手风琴卡片中默认收起，用户点击分镜看不到任何变化，且“当前帧参数”卡片和分镜卡片缺乏本帧已调参数与激活部件的直观摘要；
+    3. 桌宠 Live2D 单步定格缺失：`previewPresetStepOnModel` 预览单步时未调用 `deps.stopMotion?.()`，导致后台持续播放的动画每帧刷新覆盖骨骼参数；未清理表情层残留参数（`applyParameters`）；且非滑块标准参数未穿透合并至 Live2D 控制层；
+    4. 本地缓存预设未刷新：`DAFISH_PURGE_LEGACY_FLAG` 停留在 `v7`，本地 `localStorage` 缓存的旧预设未被刷新补种为带参数的完整分镜。
+  - **修复实现**：
+    1. **分镜点击深度状态同步 (`SettingsPanel.vue` & `settings-workshop.ts`)**：
+       - `selectEditingStep(idx)` 中同步更新 `store.modelControls` 的 `active` 与 `currentStageIndex`，并修正 `loadPresetIntoEditor` 中的部件同步；
+       - 智能自动展开有改动的面板：若当前分镜修改了姿态自动展开“头部与身体姿态”，若启用了部件自动展开“可选部件快捷开关”，若修改了五官自动展开“五官与眼神”；
+       - `controlGroups` 激活计数逻辑修复，精确支持带阶段的多态部件；
+       - 新增计算属性 `currentStepActiveControls` 和 `currentStepModifiedSliders` 并暴露给工坊。
+    2. **当前帧参数卡片与分镜列表可视化增强 (`SettingsStudioTab.vue` & `WorkshopKeyframeStack.vue`)**：
+       - 在卡片 2“STEP PARAMETERS · 当前帧参数”中新增【本帧已调参数与部件】可视化摘要区域：实时列出激活部件胶囊（如 `[抚胸]`、`[黑框眼镜]`）与偏离默认值的微调参数（如 `身体前后 (Z): +12`、`头部歪斜 (Z): +20.5°`、`嘴巴开合: 0.7`）；
+       - 在左侧分镜卡片（`WorkshopKeyframeStack.vue`）中增加 `X部件`、`X参数`、`动作` 轻量徽标，各阶段数据差异一目了然。
+    3. **桌宠 Live2D 模型精准阶段定格与穿透渲染 (`usePresetController.ts`)**：
+       - `previewPresetStepOnModel` 预览分镜时，先调用 `deps.stopMotion?.()` 打断正在循环的动作动画；
+       - 清除残余表情并复位情绪层参数（`clearExpression` 与 `applyParameters(model, {})`）；
+       - `applyStepStateToModel` 修复：在预览单步时精准关闭未激活的临时部件并开启指定部件；
+       - `applyModelControlAndSliderLayer` 增加 `directParameters` 穿透：将 `step.parameters` 直通合并至 `mergedParams`，保证所有声明参数无损生效。
+    4. **预设补种版本刷新 (`stores/deskpet.ts`)**：
+       - 升级 `DAFISH_PURGE_LEGACY_FLAG` 为 `v8`，强制本地 `localStorage` 重新补种 9 大身体主导灵动预设及其分镜数据。
+  - **验证结果**：
+    - 全量单测 1284 项测试全部通过（1278 pass, 0 fail, 6 skip）；
+    - TypeScript 0 错误（`npm run typecheck` 完美通过）；
+    - 生产构建 `npm run build` 成功通过。
+
+## 2. 现场状态
+- **Git Commit**: `d95a79f` `fix(workshop): [BUG-WORKSHOP-STEP-INSPECTION: 修复分镜点击未同步参数滑块、部件状态与桌宠阶段呈现]`
+- **工作区状态**: clean
+- **下一步建议**: 启动桌宠与设置中心实机体验工坊分镜点击联动与桌宠即时定格呈现。
+
+---
+
+# Uta 彻底移除工坊顶部冗余卡片与分镜原生动作选择器生效交接（2026-11-02）
+
+## 1. 事项与完成清单
+- **[FEAT-WORKSHOP-STEP-MOTION: 彻底移除工坊顶部两大卡片与动作导演并让分镜原生动作选择器生效]**：
+  - **背景与原因**：用户反馈预设工坊一切换过去，顶部就是大串的“原生动作库（20项）”和“成对手势闭环（3组）”，占用大量高度阻挡了核心工作台；并且在右侧分镜步骤属性（STEP PARAMETERS · 当前帧参数）中本来就已经有了“原生动作”下拉选择框，但此前未能真正对当前步骤生效。
+  - **重构与生效实现**：
+    1. **工坊顶部大卡片彻底清空**：
+       - 从 SettingsStudioTab.vue 顶部彻底删除了 原生动作库 卡片、成对手势闭环状态机 卡片以及 AI 动作导演 面板及其关联的 260 余行多余 CSS；
+       - 一切换到预设工坊，首屏 100% 直达核心工作台（左侧分镜时间线 + 右侧当前帧参数与滑块），没有任何列表阻挡。
+    2. **分镜步骤内的“原生动作”下拉框全面生效**：
+       - 将 SettingsPanel.vue 中的 motionSelection 和 onMotionSelect 从预设全局回退动作重构为直接绑定当前正在编辑的分镜步骤（currentEditingStep.value.motion）；
+       - 选项展示“无原生动作”及当前模型全部原生动画名，用户切换分镜时下拉框自动同步选中该步骤绑定的动作；更改时立即写入当前步骤并提交历史记录；
+       - 在 usePresetController.ts 的 previewPresetStepOnModel 中补充对 step.motion 的执行触发（deps.playMotionWithPriority），用户无论是切换步骤、在下拉框选择动作，还是全量试播分镜序列，选定的原生动作均会在桌宠模型上实时同步播放。
+    3. **成对手势无缝并入快捷片段**：
+       - 将 3 组闭环手势（抚胸致意、竖起食指、拿起狗尾草）作为轻量胶囊按钮无缝并入分镜时间线“一键追加常用动作片段”中；点击即可在时间线上就近追加三段分镜（起/驻/收），随用随取。
+  - **自动化与生产构建验证**：
+    - 全量单测 1284 个测试用例全部通过（1278 pass, 0 fail, 6 skip）；
+    - TypeScript 0 错误（Node 与 Web 均通过），npm run build 打包成功。
+
+## 2. 现场状态
+- **Git HEAD**: 即将提交
+- **分支状态**: main
+
+---
+
+# Uta 预设工坊分镜联动修复、待办排版优化与 VTS 参数导入增强交接（2026-11-02）
+
+## 1. 事项与完成清单
+- **[BUG-01: 修复工坊下滑至动作分镜时窗口拖动失效]**：
+  - **背景与原因**：用户反馈在进入预设工坊并向下滑动到“动作分镜”一栏时，窗口无法继续拖动。排查发现滚动容器内部嵌套的复杂子区域以及部分组件残留的 -webkit-app-region: no-drag 在 Chromium 滚动重排时污染或偏移了非客户区（Non-client draggable region）。
+  - **修复实现**：
+    1. 在 SettingsWindowApp.vue 中为 .window-action-bar 显式声明 -webkit-app-region: drag，并严密排除按钮与输入框（button, input, select, textarea, .nav-item { -webkit-app-region: no-drag; }）；
+    2. 对滚动工作区强制重置：.window-body, .window-body * { -webkit-app-region: initial !important; }，杜绝任何内层 no-drag 在滚动坐标偏移时污染标题栏与动作栏；
+    3. 在 SettingsPanel.vue 中通过 useWindowDrag() 绑定桌面浮动伴侣窗口的 .bio-header 拖拽支持，并提供无侵入的安全回退判断。
+- **[BUG-02: 修复工坊分镜点击未映射到参数滑块]**：
+  - **背景与原因**：工坊分镜列表中点击单个步骤时，右侧参数滑块未同步更新为该分镜的参数数值；根本原因一是 selectEditingStep(idx) 仅触发了动作预览而未遍历同步 store.modelSliders；二是所有内置预设的 steps 仅占位了生命周期，未携带各步骤具体参数。
+  - **修复实现**：
+    1. 在 SettingsPanel.vue 的 selectEditingStep(idx) 中遍历 store.modelSliders，将对应分镜步骤的参数值（target.parameters?.[slider.id] ?? slider.defaultValue）精确回填至滑块状态中；
+    2. 在全部大肥鱼预设（well-actually、angry、curious、happy、sad、shy、surprised、thinking、neutral）的 steps 中完整补充各分镜的动力学关键帧参数；
+    3. 将所有预设的 finishMode 规范化为 'revert'，消除残余循环模式，与步骤结束自动回正的视线恢复保持一致。
+- **[UI-06: 设置待办面板排版视觉优化]**：
+  - **背景与原因**：用户反馈待办一栏排版混乱。原实现中左列堆叠了“项目选择”、“宿主计划”和“项目待办”三个卡片，导致“项目选择”与“项目待办”被宿主计划硬生生割裂开，且两者标题与进度徽章完全重复显示；
+  - **优化实现**：
+    1. 合并左列结构：将项目下拉切换器（aria-label="项目选择"）作为紧凑优雅的工具栏无缝内置于“项目待办”卡片顶部，消除了冗余的独立卡片与重复标题/徽章；
+    2. 重新梳理信息层次：项目待办位于左侧上方，下方紧跟宿主只读镜像计划，右列独立排布日常待办，使双列高度与视觉节奏达到完美均衡；
+    3. 全面升级样式细节：优化待办行悬浮反馈、复选框过渡动效、空状态居中微文案及移动端自适应布局；
+    4. 保留全部测试契约（aria-label="项目选择"、aria-label="项目待办"、aria-label="宿主计划"、aria-label="日常待办"、todo-project-select、todoSendToHost 等），12 项待办单测全绿。
+- **[FEAT-01: 整合 jingyu-live2d-agent 的 VTS 参数导入]**：
+  - **背景与原因**：参考 jingyu-live2d-agent 中对 VTube Studio 模型的参数导入与离线校准实现，补齐 Uta 在外部 VTS 模型导入时的映射能力。
+  - **功能增强**：
+    1. 扩充 buildFocus 的正则识别逻辑：不仅支持简写（AngleX, PositionX），同时完整支持 Cubism 标准命名体系（ParamAngleX, ParamAngleY, ParamAngleZ, ParamEyeBallX, ParamEyeBallY, ParamBodyAngleX, ParamBodyAngleY, ParamBodyAngleZ）；
+    2. 补充提取 bodyZParam 身体 Z 轴映射，使视线跟随与身体动力学更饱满；
+    3. 新增 vtsMappings 列表提取并注入 VtsSidecarPlan（包含输入来源 Input、输出Live2D参数 OutputLive2D、范围下限/上限与平滑度 Smoothing）；
+    4. 在 tests/vts-import.test.cjs 补充 5 组全量断言并全部通过。
+
+## 2. 现场状态
+- **Git 分支**: main
+- **自动化测试**: 1284 个测试用例全部通过（1278 pass, 0 fail, 6 skip）
+- **类型检查与构建**: npm run typecheck 0 错误，npm run build 生产构建成功。
+
+---
+
+# Uta 澶ц偉楸肩敓姘斿姩浣滃交搴曠Щ闄ゅ厰鐗欐悶鎬儴浠朵氦鎺ワ紙2026-11-02锛?
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?- **[FIX-PRESET-ANGRY-REMOVE-TEETH: 褰诲簳绉婚櫎鐢熸皵鍔ㄤ綔涓殑鍏旂墮鎼炴€儴浠跺苟閲嶅鑷劧鍡旀€掑彛鍨媇**锛?  - **鑳屾櫙涓庡師鍥?*锛?    - 鐢ㄦ埛璇勫鎸囧嚭锛氣€滀负浠€涔堣繕鏈夊厰鐗欙紵杩欎釜鍏旂墮鍙湪鎼炴€敤鐨勫姩浣滈噷鍑虹幇灏卞ソ浜嗏€濓紱
+    - 鍏旂墮锛坄key9`锛夊睘浜庢ā鍨嬬壒鏈夌殑婊戠ń鎼炴€儴浠讹紝姝ゅ墠鍦?Nerd 姊楀姩浣滐紙`well_actually`锛変腑鍙戞尌鑹ソ锛屼絾鍦ㄥ父瑙勪弗鑲?鍡旀€掔殑鐢熸皵鍔ㄤ綔涓嚭鐜颁細鐮村潖瑙掕壊鐪熷疄鐨勬儏缁紶杈撅紝鏄惧緱鎼炵瑧鑽掕艾锛?    - 閬靛惊鍘熷垯锛?*鍏旂墮浠呬笖蹇呴』鍙湪鎭舵悶/鎼炴€被鍔ㄤ綔锛堝 `well actually......`锛変腑鐧诲満锛屽父瑙勬儏缁竴寰嬩弗绂侀湶鍑哄厰鐗?*銆?  - **淇敼涓庨噸濉戠粏鑺?*锛?    1. **鍏旂墮褰诲簳褰掗浂**锛?       - `dafish-body-led-angry.ts` 涓畬鍏ㄧЩ闄や簡瀵?`key9` 鐨勬縺娲伙紝骞舵樉寮忛厤缃?`add('key9', [[0, 0], [duration, 0]])`锛屾潨缁濅换浣曞巻鍙插姩浣滄畫鐣欙紱
+    2. **閲嶅鑷劧绱х环鎶垮槾鍙ｅ瀷**锛?       - 閲囩敤闂彛绱х环涓嬫拠鎬掓剰鍢达紙`ParamMouthForm: -0.65`锛夛紝鍢撮儴寮€鍚堝畬鍏ㄩ棴鍚堥攣瀹氾紙`ParamMouthOpenY: 0`锛夛紱
+       - 閰嶅悎婊￠潰閫氱孩锛坄key7: 0.90`锛夈€佸€掑叓瀛椾弗鍘夎箼鐪夛紙`LAngle/RAngle: -0.55`锛変笌澶у箙搴﹁韩浣撳墠鍊撅紙`LeanInput: -25`锛宍PositionZ: 15`锛夛紝褰㈡垚绾补銆佸噷鍘変笖鑷劧姝ｇ粡鐨勭洿瑙嗘€掕鐘舵€侊紱
+    3. **杩佺Щ涓庡崟娴嬮獙璇?*锛?       - `deskpet.ts` 杩佺Щ鐗堟湰鍗囪嚦 `v5`锛?       - `dafish-body-led-angry.test.cjs` 澧炲姞瀵?`key9 === 0` 鐨勫己鏂█锛屾祴璇曞叏杩囷紱
+       - TypeScript 0 閿欒锛岀敓浜ф瀯寤哄畬鎴愩€?
+## 2. 鐜板満鐘舵€?- **Git HEAD**: `af9b535` (`fix(presets): [FIX-PRESET-ANGRY-REMOVE-TEETH: 褰诲簳绉婚櫎鐢熸皵鍔ㄤ綔涓殑鍏旂墮鎼炴€儴浠跺苟閲嶅鑷劧鍡旀€掑彛鍨媇`)
+- **鍒嗘敮鐘舵€?*: `main` 鍒嗘敮鏁存磥銆?
+---
+
+# Uta 澶ц偉楸肩敓姘斿姩浣滀负姝ｅ韬綋鍓嶅€鹃噸鏋勪氦鎺ワ紙2026-11-02锛?
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?- **[FEAT-PRESET-ANGRY-FORWARD-LEAN: 閲嶆瀯澶ц偉楸肩敓姘斿姩浣滀负姝ｅ涓嶅亸澶寸殑澶у箙搴﹁韩浣撳墠鍊鹃€艰繎涓庢皵鎰ゅ枠鎭痌**锛?  - **鑳屾櫙涓庡師鍥?*锛?    - 鐢ㄦ埛璇勫鎸囧嚭锛氣€滆繖涓敓姘斿彲浠ラ噸鍋氫竴涓嬶紝涓嶇敤鍋忓ご锛岃韩浣撳墠鍊惧氨濂解€濓紱
+    - 閽堝鍘熲€滃偛濞囪浆韬€濈増鏈腑韬綋鍚戝澶т晶韬伩寮€灞忓箷锛坄AngleX: 14`, `PositionZ: -16`, `PositionX: 12`锛夌殑琛ㄧ幇锛屽交搴曞幓闄ゅ亸澶翠笌渚ц韩杞悜锛屾敼涓烘闈㈤€艰繎鐢ㄦ埛鐨勫ぇ寮€澶у悎鍓嶅€惧Э鎬併€?  - **鏂板姩浣滄椂搴忎笌鍔ㄥ姏瀛︾紪鎺掞紙5.6 绉掑惊鐜級**锛?    1. **0.0s ~ 0.8s銆愯韩浣撳墠鍊鹃€艰繎路姝ｉ潰鐩磋銆?*锛?       - 鍘婚櫎鎵€鏈変晶鍚戞棆杞笌姝ご鍋忚锛歚AngleX: 0`, `AngleZ: 0`, `PositionX: 0`锛屾姝ｉ潰瀵瑰睆骞曚笌鐢ㄦ埛锛?       - 韬共鐚涚儓鍚戝墠鍊惧€掗€艰繎锛坄LeanInput: -22.0 ~ -25.0`, `PositionZ: 13.0 ~ 15.0`锛夛紱
+       - 涓嬪反寰敹涓嬪帇锛坄AngleY: -3.0 ~ -3.5`锛夛紝瑙嗙嚎涓婄炕姝绘閿佸畾骞舵瑙嗙敤鎴凤紙`ParamEyeBallX: 0`, `ParamEyeBallY: 0.12`锛夛紱
+    2. **0.8s ~ 3.6s銆愭€掓剰鐖嗗彂路姘旂孩鑴稿挰鐗欏枠鎭€?*锛?       - 婊￠潰姘旂孩锛坄key7: 0.90`锛夛紝鍜揣澶ч棬鐗欙紙`key9: 0.85`锛夛紱
+       - 涓ュ帀鍊掑叓瀛楀€掔珫鐪夛紙`ParamBrowLAngle/RAngle: -0.55`锛夛紝绱х环鎬掔洰鍦嗙潄锛?       - 鑳歌厰浼撮殢鎬ヤ績鍓х儓璧蜂紡姘旀劋鍠樻伅锛坄PositionY: -2.0 <-> +0.8` 澶氬懆鏈熷墽鐑堝懠鍚革紝鍢撮儴閰嶅悎鍠樻伅寮€鍚?`ParamMouthOpenY: 0.04 ~ 0.12`锛夛紱
+       - 鎬掓剰涓婂ご鍏ㄧ▼涓嶇湪鐪硷紱
+    3. **3.6s ~ 4.6s銆愭皵娑堢紦鍜屄峰钩绋冲悗鎾ゃ€?*锛?       - 鎬掓剰骞虫伅锛岄棬鐗欎笌鑴哥孩娣″嚭锛岃韩浣撶紦缂撶洿璧峰洖姝ｏ紝骞跺湪 4.0s 澶勫畬鎴愪竴娆″钩闈欓棴鐩湪鐪硷紙140ms锛夛紱
+    4. **4.6s ~ 5.6s銆愬钩婊戝綊闆朵笌鏃犵紳 C1 寰幆銆?*銆?  - **绯荤粺闆嗘垚涓庨獙璇?*锛?    - 棰勮鍛藉悕鏇存柊涓?`鐢熸皵路韬綋鍓嶅€綻锛?    - `deskpet.ts` 杩佺Щ鐗堟湰鍗囪嚦 `v4`锛岀‘淇濈敤鎴峰埛鏂扮晫闈㈡椂鑷姩鍔犺浇閲嶆瀯鍚庣殑鐢熸皵棰勮锛?    - 鍗曟祴 `tests/dafish-body-led-angry.test.cjs` 鏂█鍓嶅€句笌姝ｉ潰鐩磋鍏ㄩ儴閫氳繃锛?    - 19 椤?Live2D 鍔ㄤ綔鍗曟祴鍏ㄨ繃锛宍npm run typecheck` 0 閿欒锛宍npm run build` 鑰楁椂 2.83s 鏋勫缓鎴愬姛銆?
+## 2. 鐜板満鐘舵€?- **Git HEAD**: `1b0611c` (`feat(presets): [FEAT-PRESET-ANGRY-FORWARD-LEAN: 閲嶆瀯澶ц偉楸肩敓姘斿姩浣滀负姝ｅ涓嶅亸澶寸殑澶у箙搴﹁韩浣撳墠鍊鹃€艰繎涓庢皵鎰ゅ枠鎭痌`)
+- **鍒嗘敮鐘舵€?*: `main` 鍒嗘敮鏁存磥銆?
+---
+
+# Uta 澶ц偉楸煎交搴曟竻鐞嗚€佹棫棰勮涓庡叏閲忓崌绾х伒鍔ㄨ〃婕斾氦鎺ワ紙2026-11-02锛?
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?- **[FEAT-PRESETS-CLEANUP-LEGACY: 褰诲簳娓呯悊澶ц偉楸艰€佹棫闈欐€侀璁惧苟鍏ㄩ噺鍗囩骇涓?澶ц韩浣撲富瀵肩伒鍔ㄩ璁綸**锛?  - **鑳屾櫙涓庡師鍥?*锛?    - 鐢ㄦ埛鎺掓煡鎸囧嚭鍦ㄦ瀹犵晫闈腑鈥滄湁浜涗技涔庤繕鏄€佸姩浣溾€濓紱
+    - 缁忔繁鍏ユ帓鏌ュ彂鐜帮細璁剧疆闈㈡澘涓殑鎯呯华鍒嗙粍灏忚兌鍥婂湪鐐瑰嚮鏃讹紙`onGroupCapsuleClick`锛夐粯璁ゅ彧鎾斁璇ュ垎缁勭殑绗竴椤癸紙`grp.items[0]`锛夛紝鑰屽巻鍙查仐鐣欑殑 20 浣欎釜寰皟闈欐€侀璁撅紙濡傘€屽ソ濂嚶锋澶存墦閲忋€嶃€併€屾€濊€兟锋墭鑵壘绾跨储銆嶃€併€屾寚寮暵风珫鎸囪鏁欍€嶃€併€屾儕璁堵锋垬鏈悗浠般€嶇瓑锛夋帓鍦ㄦ渶鍓嶏紝鏂板仛鍔ㄤ綔鎺掑湪鏈熬锛涗笖浼翠荆/鎸囦护鎯呯华鍒嗗彂姹犱腑鏃у姩浣滃崰姣旈珮杈?50%~75%锛?    - 鏍规嵁鐢ㄦ埛鏄庣‘鎸囦护锛氣€滅洿鎺ユ妸鑰侀璁惧垹浜嗗惂鈥濓紝褰诲簳瀵瑰ぇ鑲ラ奔鎵€鏈夎€佹棫棰勮鍙婅繃鏃剁殑瀵圭収鏍锋澘杩涜鐗╃悊娓呯悊涓庡叏閲忓崌绾с€?  - **娓呯悊涓庨噸鏋勮寖鍥?*锛?    1. **褰诲簳娣樻卑鑰佹棫棰勮姹?*锛?       - 娓呯悊 `natural-presets.dafish.json` 涓殑 23 涓€佹棫闈欐€佸弬鏁伴」锛坄happy`, `happy_tilt`, `sad`, `sad_glance`, `angry`, `angry_glare`, `annoyed`, `weary`, `embarrassed`, `shy`, `shy_peek`, `thinking`, `focus`, `curious`, `surprised`, `waiting`, `testing`, `morph_small`, `morph_large`, `cheer`, `nod`, `wave`锛夛紱
+       - 娓呯悊鏃╂湡鐨勫紑蹇冨疄楠屽鐓ф牱鏉匡紙`dafish_happy_sample_v1`, `dafish_authored_happy_v2`, `dafish_calibrated_happy_v3`锛夛紱
+    2. **澶ц偉楸奸璁惧敮涓€鐪熷疄婧愬崌绾?*锛?       - `buildDafishNaturalPresets` 閲嶅啓涓虹函绮逛笖浠呭寘鍚?9 涓珮琛ㄧ幇鍔涖€?0 FPS 杩炵画鍔ㄥ姏瀛︾紪鎺掔増鏈細
+         - **鏃ュ父 (`neutral`)**锛氭棩甯稿緟鏈郝烽潤璋ч櫔浼达紙6.0s 鍛煎惛璧蜂紡 + 鍙屽懆鏈熺敓鐞嗙湪鐪硷級
+         - **寮€蹇?(`dafish_body_led_happy_v4`)**锛氬紑蹇兟疯韩浣撲富瀵硷紙6.4s 鎶氳兏杞荤瑧 + 楠ㄧ泦鑵块儴杩炲甫锛?         - **濂藉 (`dafish_body_led_curious`)**锛氬ソ濂嚶峰ぇ姝ご鎺㈣韩锛?.6s 鎺㈣韩鍓嶅€?+ 22掳澶ф澶?+ 鍨剼寮硅烦锛?         - **鎯婂 (`dafish_body_led_surprised`)**锛氭儕濂嚶锋垬鏈悗浠帮紙5.4s 鎴樻湳鍚庝话 + 鐬冲瓟鎬ョ缉 + 澶у紑鍢村枠鎭級
+         - **濮斿眻鍘嬫姂 (`dafish_body_led_sad`)**锛氬灞埪锋姎鑳稿惈娉紙6.0s 鍏ㄨ韩澶辫惤鍧嶅 + 鎶氳兏 + 娉豹姹?+ 鎶藉檸璧蜂紡锛?         - **鐢熸皵 (`dafish_body_led_angry`)**锛氱敓姘斅峰偛濞囪浆韬紙5.6s 鍐崇粷渚ц韩鑳屽 + 鍜墮鍒囬娇鑴哥孩 + 鏂滅潹鍋风瀯锛?         - **瀹崇緸 (`dafish_body_led_shy`)**锛氬缇灺风緸璧у伔鐪嬶紙5.6s 鎬敓鐢熸姢鑳?+ 缁孩鑴搁 + 浣庡ご鍋风灔寰瑧锛?         - **鎬濊€?(`dafish_body_led_thinking`)**锛氭€濊€兟峰崟鐗囩溂闀滄矇鎬濓紙5.6s 閲戣壊鍗曠墖闀?+ 浠板ご鐩樼畻 + 鐏靛厜涓€闂級
+         - **瓒ｅ懗 (`well_actually`)**锛氳叮鍛陈稺ell actually锛?.6s Nerd 鍚嶅満闈㈤粦妗嗙溂闀?+ 澶ф澘鐗?+ 绔栭鎸囨墦鎷嶅瓙锛?    3. **鑷姩鎸佷箙鍖栧瓨鍌ㄨ縼绉?*锛?       - 鍦?`deskpet.ts` 涓疄鐜?`purgeDafishLegacyPresets(key)`锛屼竴鏃︽娴嬪埌澶ц偉楸兼ā鍨嬪姞杞芥垨椤甸潰鍒锋柊锛岃嚜鍔ㄥ皢鐜版湁 `localStorage` 妗跺唴娈嬬暀鐨勮€佹棫棰勮娓呴櫎锛屾浛鎹㈠苟鎸佷箙鍖栦负绾噣鐨?9 澶х伒鍔ㄩ璁撅紱
+       - 閲嶇疆榛樿棰勮锛坄restoreDefaultPresets`锛変笌榛樿鐘舵€侀璁撅紙`statePresets`锛夊悓姝ユ洿鏂帮紝涓嶅啀鏈変换浣曡€佹棫椤规畫鐣欙紱
+    4. **鑳跺泭涓庡垎鍙?100% 鍛戒腑**锛?       - 姣忎釜鍒嗙粍鏈変笖浠呮湁 1 涓唬琛ㄩ璁撅紝鐐瑰嚮灏忚兌鍥婄洿鎺?100% 鎾斁璇ラ珮琛ㄧ幇鍔涚増鏈紝鎶戒腑鑰佸姩浣滄鐜囧交搴曞綊闆躲€?  - **楠岃瘉**锛?    - `tests/natural-presets.test.cjs` 8 椤规祴璇曞叏杩囷紱
+    - 7 澶ц韩浣撲富瀵煎姩浣?+ Nerd 姊楁祴璇?19 椤瑰叏杩囷紱
+    - `npm run typecheck`锛圢ode 涓?Web锛? 閿欒锛?    - `npm run build` 鑰楁椂 2.81s 鎵撳寘鎴愬姛銆?
+## 2. 鐜板満鐘舵€?- **Git HEAD**: `6f2fd8f` (`feat(presets): [FEAT-PRESETS-CLEANUP-LEGACY: 褰诲簳娓呯悊澶ц偉楸艰€佹棫闈欐€侀璁惧苟鍏ㄩ噺鍗囩骇涓?澶ц韩浣撲富瀵肩伒鍔ㄩ璁綸`)
+- **鍒嗘敮鐘舵€?*: `main` 鍒嗘敮鏁存磥銆?
+---
+
+# Uta 澶ц偉楸煎叏濂楅璁剧粍韬綋涓诲鐏靛姩琛ㄦ紨浜ゆ帴锛?026-11-02锛?
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?- **[FEAT-PRESETS-BODY-LED-ALL: 涓哄叏濂楅璁剧粍鏋勫缓楂樿〃鐜板姏韬綋涓诲鐏靛姩琛ㄦ紨涓庨璁綸**锛?  - **鑳屾櫙涓庣洰鏍?*锛?    - 鍦?Nerd 璇存暀棰勮锛坄well actually......`锛夎幏寰楃敤鎴烽珮搴﹁鍙紙鈥滃緢涓嶉敊锛屽彲浠ョ収鐫€杩欎釜鑺傚寰€涓嬪仛锛屾帴涓嬫潵缁欐墍鏈夐璁剧粍鍋氫竴浠解€濓級鍚庯紝鎸夌収 `live2d-calibration/SKILL.md` 鐨勮皟鏍¤鑼冿紙鐗╃悊楠ㄩ杈撳叆椹卞姩銆佸ぇ寮€澶у悎鍙骞呭害銆佸叧鑺傝繃娓″钩婊戙€侀珮娼椂鐐硅〃鎯呭挰鍚堛€丠ermite 杩炵画鎻掑€笺€?0 FPS 瀵兼暟杩炵画褰掗浂锛夛紝涓哄ぇ鑲ラ奔妯″瀷鍏ㄥ鏍稿績鎯呯华棰勮缁勬墦閫犻珮琛ㄧ幇鍔涚殑韬綋涓诲杩炵画鍔ㄤ綔锛?    - 褰诲簳鍛婂埆浠ュ線鈥滃井骞呮紓绉汇€佸彧鏈夊ご鍔ㄣ€佺湅涓嶅嚭鎯呯华鍙樺寲鈥濈殑缂洪櫡銆?  - **鏂版瀯寤虹殑 7 澶ф儏缁姩浣滅敓鎴愬櫒娓呭崟**锛?    1. **濂藉路澶ф澶存帰韬?(`dafish-body-led-curious.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.6 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氬ぇ骞呭墠鍊炬帰韬紙`LeanInput: -24`, `PositionZ: 12`, `PositionX: -9`锛夛紝澶撮儴澶ц搴︽鏂?22掳锛坄AngleZ: 22掳`锛夛紝鍢撮儴濂藉 O 鍨嬪井寮狅紝鑴氫笅杞诲揩寮硅烦璧蜂紡锛堜袱娆℃尝宄版尝璋凤級锛屽熬澹伴湶鍑哄ソ濂囨鍠滄祬绗戜笌 140ms 鐢熺悊鐪ㄧ溂銆?    2. **鎯婂路鎴樻湳鍚庝话 (`dafish-body-led-surprised.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.4 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氭垬鏈悗浠版媺寮€璺濈锛坄LeanInput: +25`, `PositionZ: 16`, `PositionY: 4.8`锛夛紝鐬冲瓟鐬棿鍙楁儕缂╂斁锛坄ParamEyeScale: -0.85`锛夛紝澶у紶鍢村€掑惛鍑夋皵锛坄ParamMouthOpenY: 0.70`, `ParamMouthForm: -0.55`锛夛紝韬綋涓ゆ鎬ヤ績鍠樻伅璧蜂紡鍚庨€愭笎骞冲鍥炰綅銆?    3. **濮斿眻路鎶氳兏鍚唱 (`dafish-body-led-sad.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.0 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氬叏韬け钀藉潔缂╀笅娌夛紙`PositionY: -5.5`, `PositionX: -6.5`, `PositionZ: -8`锛夛紝鎶氳兏瀹夋叞鎵嬪娍锛坄Movement2: 1`锛夛紝鍙岀溂娉豹姹紙`key2: 1`锛夛紝涓嬪瀭闅捐繃鍢磋锛坄ParamMouthForm: -0.75`锛夛紝鑳歌厰涓ゆ鎶藉檸璧蜂紡鍚庡钩绋虫敹鍥炪€?    4. **鐢熸皵路鍌插▏杞韩 (`dafish-body-led-angry.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.6 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氭皵鎭煎埆杩囪韩瀛愯儗瀵癸紙`PositionZ: -16`, `PositionX: 12`, `AngleX: 14`锛夛紝鍜墮闇查娇涓庤劯棰婃皵榧撻紦姘旂孩锛坄key9: 0.85`, `key7: 0.85`锛夛紝绱х环鐭績鍛煎惛锛岀溂绁炰粠鐪艰浣欏厜鎭剁嫚鐙犲伔鐬勭洴浜猴紙`ParamEyeBallX: -0.55`锛夈€?    5. **瀹崇緸路缇炶掸鍋风湅 (`dafish-body-led-shy.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.6 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氭€敓鐢熷崟鎵嬫姢鑳革紙`Movement2: 1`锛夛紝鑴搁缁孩锛坄key7: 0.92`锛夛紝鍨傞寰晶澶达紝瑙嗙嚎浣庡瀭鍚庣緸鎬湴鍋峰伔鎶溂鐪嬪悜鐢ㄦ埛锛屽槾瑙掓硾璧风緸璧х敎绗戯紙`ParamMouthForm: 0.65`锛夛紝浼撮殢鎱屼贡灏忕湪鐪笺€?    6. **鎬濊€兟峰崟鐗囩溂闀滄矇鎬?(`dafish-body-led-thinking.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.6 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氭埓涓婇噾鑹插崟鐗囩溂闀滐紙`key12: 1`锛夛紝浠板ご鎵樿叜濮挎€侊紙`AngleY: 5.5`, `AngleZ: -7`锛夛紝瑙嗙嚎鍚戜笂娓哥Щ鐩樼畻锛屼袱娆¤兏鑵旀繁鎬濊捣浼忥紝鏈€缁堢伒鍏変竴闂紙鐪肩鍥炴鑱氱劍銆佽嚜淇＄瑑瀹氬井绗戙€佸埄钀界湪鐪硷級銆?    7. **鏃ュ父寰呮満路闈欒哀闄即 (`dafish-body-led-neutral.ts`)**锛?       - **鏃跺簭鏃堕暱**锛?.0 绉掑惊鐜紱
+       - **鍔ㄥ姏瀛︾壒寰?*锛氳嚜鐒跺畨璇︾殑鍛煎惛璧蜂紡锛坄PositionY: 1.4 <-> -1.2`锛夛紝閲嶅績寰Щ涓庢煍鍜岃函骞叉憜鍔紝鍙屽懆鏈?140ms 鐢熺悊鐪ㄧ溂锛?.8s 涓?4.5s锛夛紝绁炴儏鎭贰鑷劧銆?  - **绯荤粺闆嗘垚涓庨獙璇?*锛?    - **鐢熷懡鍛ㄦ湡娉ㄥ唽**锛氬湪 `useStageModelLifecycle.ts` 涓敞鍐屽叏閮?7 涓姩浣滅粍鍚嶇О銆佹椂闀垮強涓€閿畨瑁呭嚱鏁帮紱
+    - **棰勮鎸傝浇**锛氬湪 `deskpet.ts` 涓粺涓€鎸傝浇 7 涓姩浣滅殑瀵瑰簲棰勮锛坄curious`, `surprised`, `sad`, `angry`, `shy`, `thinking`, `neutral`锛夛紝甯︽湁鐙珛瀛樺偍鐗堟湰鏍囪閬垮厤缂撳瓨姹℃煋锛?    - **鑷姩鍖栨祴璇?*锛氭柊澧?7 涓嫭绔嬪崟鍏冩祴璇曟枃浠跺苟鎺ュ叆 `npm test`锛屽叏濂?1283 椤规祴璇曞叏閮ㄩ€氳繃锛?277 pass, 6 skipped, 0 fail锛夛紱
+    - **绫诲瀷涓庢瀯寤?*锛歚npm run typecheck` 0 閿欒锛宍npm run build` 鑰楁椂 2.71s 鎴愬姛鐢熸垚鍙戣鍖呬骇鐗┿€?
+## 2. 鐜板満鐘舵€?- **Git HEAD**: `f3076c3` (`feat(presets): [FEAT-PRESETS-BODY-LED-ALL: 涓哄叏濂楅璁剧粍鏋勫缓楂樿〃鐜板姏韬綋涓诲鐏靛姩琛ㄦ紨涓庨璁綸`)
+- **鍒嗘敮鐘舵€?*: `main` 鍒嗘敮淇濇寔鏁存磥銆?- **鑷姩鍖栨祴璇曠姸鎬?*: 1283 椤规祴璇曞叏閮ㄩ€氳繃锛?277 pass, 0 fail锛夈€?- **鍙敤棰勮闆?*: `happy`, `well_actually`, `curious`, `surprised`, `sad`, `angry`, `shy`, `thinking`, `neutral` 鍧囧凡鍏峰楂樿〃鐜板姏杩炵画鍔ㄥ姏瀛︾増鏈€?
+---
+
+# Uta 澶ц偉楸煎紑蹇冭劯閮ㄤ笌鎶氳兏鍚屾锛?026-11-02锛?
+
+- **鐢ㄦ埛鑼冨洿**锛氳鍙綋鍓嶈韩浣撳箙搴︼紝瑕佹眰寮犲槾绗戜笌鎶氳兏鍚屾椂寮€濮嬨€佹墜褰掍綅鍚庣粨鏉熴€傚熀绾縛4760fc8`锛屽疄鐜癭b9b7415`锛涙部鐢╒4 ID/鍔ㄤ綔缁?6.4绉掞紝涓嶆柊澧炵増鏈垨鏀瑰彉韬綋銆?
+- **瀹炵幇**锛歏4澶嶇敤V3鑴搁儴鐨勬椂闂村帇缂╁鑷村槾閮ㄩ珮鐐圭害2.3绉掞紝钀藉悗浜庢姮鎵嬨€傜幇灏哖aramMouthOpenY銆丳aramMouthForm銆丒yeSmile缁戝埌鎵嬪娍鐢熷懡鍛ㄦ湡锛歨andStart=.24锛?56杈惧埌鍘熷嘲鍊硷紝淇濇寔鑷砲andHome=3.12锛屽啀娓愬嚭鑷?.55锛涘叾浣?8鏉＄紪璇戞洸绾夸笌宸叉帴鍙楀熀绾块€愬瓧鑺傜浉鍚屻€?
+- **楠岃瘉**锛氬叏閲?267锛?261閫氳繃銆?璺宠繃銆?澶辫触锛夛紝Node/Web绫诲瀷/鏋勫缓閫氳繃銆傛柊澧炲悓姝ュ洖褰掞紝杈圭晫閲囩敤60Hz鐑樼剻璇樊瀹归檺銆傛甯窼DK杩戞櫙/涓よ疆褰曞睆/涓€斿仠姝㈠凡楠岋紱瀹為檯mouth绾?27淇濇寔鍒版墜鍥烇紝3.56绉掔害.025锛屽仠姝㈡棤娈嬬暀銆備粎鍙瑙傚療鐩戝惉锛屾棤live2dLab寮哄啓銆?
+- **鐜板満**锛氬悓涓€闅旂PID20240鏂版椂搴忓惊鐜紱鍘焏ev20152鏈噸鍚€傚師韬綋宸叉帴鍙楀綍灞忔湭瑕嗙洊銆傛柊棰勮鍜岃繎鏅湪`D:/Frankenstein/Uta-Workspace/runtime/previews/dafish-face-sync-20261102/`锛涘師甯у湪涓婁竴杞甪inal/face-sync-clean涓巉ace-sync-stop銆傚垵娆′笌鍏ㄩ噺娴嬭瘯骞惰褰曞埗鏈夐噰闆嗛棿闅旀紓绉伙紝宸查噸鏂板共鍑€褰曞埗锛涙渶缁堜袱杞?56甯х害12.806绉掞紝鎸夋椂闂存埑瀵煎嚭6.4绉扺ebP銆?
+- **杈圭晫**锛氬彧鏀逛笁鏉¤劯閮ㄨ建閬擄紝鏈墿灞曞叾浠栫姸鎬併€佹敼鏃ュ父鏁版嵁/瀹夸富/鍘熸ā鍨嬫垨鎵撳寘銆傛湭璺熻釜瀹夸富楠岃瘉璁板綍鏈姩銆傜敤鎴峰皻鏈瘎浠疯繖娆¤劯閮ㄦ椂搴忥紝涓嶅皢姝ゅ墠韬綋璁ゅ彲鎵╁ぇ涓烘柊鑴搁儴宸查獙鏀躲€傚畬鏁碵浜や粯](results/dafish-face-sync-20261102.md)銆?
+
+---
+
+# Uta 澶ц偉楸糣3琚惁瀹氬悗鐨勮韩浣撲富瀵间慨姝ｏ紙2026-11-02锛?
+
+- **鏈€鏂扮敤鎴风‘璁?*锛氭鍓嶈亰澶╅瑙堜笌Uta绐楀彛鏁堟灉鐩稿悓锛涘綋鍓峍4鈥滄尯鍚堥€傗€濄€備互褰撳墠6.4绉掔増鏈殑骞呭害鍜岃妭濂忎綔涓哄ぇ鑲ラ奔寮€蹇冨熀绾匡紝淇濈暀鐜版湁鏁堟灉銆傝鍙笉鎵╁ぇ鍒板叾浠栫姸鎬侊紝涓嶈嚜琛屾敹鍥炲埌V3鐨勫皬骞呮參閫熴€?
+
+- **鐢ㄦ埛鍙嶉浼樺厛**锛歏3鏁堟灉鐗瑰埆宸€佸箙搴︿笉鍙療瑙夈€佽繃鎱€佽韩浣撳儚鍙湁澶村湪鍔ㄣ€傛鍓嶇殑400娆℃爣瀹氬拰娴嬭瘯閫氳繃涓嶈兘浣滀负瑙傛劅鍚堟牸璇佹槑銆備繚鐣欐棫鏍锋澘/褰曞睆浣滀负澶辫触瀵圭収锛屼笉鍐嶇ОV3宸插畬鎴愯嚜鐒舵晥鏋溿€?
+- **鍩虹嚎涓庢彁浜?*锛氬熀绾縛770ad33`锛沗12ebb75`淇鍏抽棴璺熼殢鍚庣瀯鍑嗗叏韬敾甯冧腑蹇冭€岄潪涓珛浣嶇疆锛屾柊澧瀝esetLive2DModelFocus锛岀湡瀹炴覆鏌撳惊鐜洖褰掕鐩栦竴娆″綊闆朵笖涓嶉噸澶嶅啓銆俙413966e`鏂板6.4绉扸4銆屽紑蹇兟疯韩浣撲富瀵兼牱鏉裤€嶏紝ID `dafish_body_led_happy_v4`锛岀粍銆屽紑蹇兟峰ぇ鑲ラ奔韬綋涓诲銆嶃€傚鐢ㄦ垜浠嚜宸辩殑V3鑴搁儴杞ㄩ亾锛屽叏閮ㄨ韩浣?鎵嬪娍鏃跺簭閲嶇紪锛屾棤鍘熺敓鍔ㄤ綔璧勪骇杈撳叆銆?
+- **骞呭害涓庤妭濂?*锛歅ositionX/Z宄?2/16锛孻宄?.5锛孡eanInput宄?.5锛涙姮鎵?24鈫?98绉掞紝鏀舵墜2.12鈫?.12绉掋€傚ご閮ㄥ皬骞呴厤鍚堬紱鍙︽湁headStill璇婃柇鍙樹綋銆傞娆＄┖鐢熷懡鍛ㄦ湡姝ラduration200/hold1400锛屾楠ゆ€婚暱浠?600ms锛岄伩鍏嶈绾胯璺€楁帀涓昏韬綋鍔ㄤ綔銆俈1/V2/V3鍧囨湭鏀广€?
+- **楠岃瘉**锛氭渶缁?266椤癸紙1260pass銆?skip銆?fail锛夛紝绫诲瀷涓庢瀯寤洪€氳繃锛涗笓椤?3閫氳繃銆傛柊鐨刦resh profile姝ｅ父SDK褰曞埗澶村浐瀹?.2绉掋€佹甯镐袱杞?2.8绉掋€佸仠姝?.5绉掋€傚ご鍥哄畾娓叉煋鍓岮ngleX/Y/Z鍏?锛岃函骞瞆绾?12.68..3.16銆侀鐩哯绾?2.30..9.73銆佽吙Z绾?4.18..16.33锛涙甯告挱鏀句笌鍋滄鐢婚潰宸叉煡銆傛棭鏈焗ead-still鍜宧ead-still-clean鍙楁棫瑙嗙嚎/姝ラ骞叉壈锛屼笉鑳藉紩鐢ㄤ负鎴愬姛璇佹嵁銆?
+- **鐜板満**锛氭渶缁堥瑙坄Uta [live2d-lab]` PID20240锛屼复鏃舵牴`uta-live2d-lab-t7HujU`锛屼繚鐣橵4寰幆銆傚疄楠?9688宸查€€鍑猴紱鍘熷紑鍙?0152鏈噸鍚€傛湁鏁堣瘉鎹?濯掍綋鍦╜D:/Frankenstein/Uta-Workspace/runtime/previews/dafish-body-led-20261102/final/`锛宧appy-v4.webp涓烘柊鐗囷紝head-fixed.webp涓哄ご鍥哄畾锛寁3-v4-realtime.webp鍚岄€熷姣斻€傛棤瀹為獙寮哄啓閽╁瓙锛岃繍琛屾椂gaze/idle鍏抽棴锛宺enderer閿欒0銆?
+- **娌夋穩**锛氫慨姝kill鐨勨€滃厛灏忓箙鈥濋敊璇€惧悜锛氬厛纭甯哥敤灏哄涓嬭偐浠ヤ笅娓呮鍙姩锛屽啀鏀舵暃骞呭害锛涜鍙栬繍琛屾椂璁剧疆锛屼笉鑳藉彧鍐欐棫localStorage閿€備粨搴搒kill鍜屾湰鏈洪粯璁kills鍓湰鍚屾銆傛爣瀹氳褰曡拷鍔犵敤鎴峰惁瀹氫笌瀹為獙姹℃煋璇存槑銆?
+- **杈圭晫**锛氭湭鏀规棩甯告暟鎹?鍘熸ā鍨?瀹夸富閰嶇疆锛屾湭瀹夎鎻掍欢銆佺湡瀹炲彂閫佹垨鎵撳寘锛涙湭璺熻釜瀹夸富楠岃瘉鏂囦欢鏈姩銆備笅涓€姝ヤ互鐢ㄦ埛瀵规柊鐗囩殑鍏蜂綋瑙傛劅缁х画杩唬锛屼笉鑷姩鎵╁睍鐘舵€佹垨鎶婂凡閫氬弬鏁板綋鎴愬缇庨獙鏀躲€傚畬鏁碵浜や粯璁板綍](results/dafish-body-led-happy-20261102.md)銆?
+
+---
+
+# Uta 澶ц偉楸艰瑙夋爣瀹氫笌寮€蹇冭瘯鐗囦氦鎺ワ紙2026-11-02锛?
+
+- **鎺堟潈/鍩虹嚎/鎻愪氦**锛氱敤鎴风‘璁ら€氳繃瑙嗚鍙嶉鎽告竻鏈夋晥鍙傛暟鍚庡啀缂栨帓銆傚熀绾?`main@cd7f7dc`锛涘伐鍏蜂笌棣栬疆瀹炴祴 `60ed179`锛屾柊璇曠墖 `1ea1716`銆備笉鎺?VTS锛屼笉澶嶇敤鍘熺敓鍔ㄤ綔鏇茬嚎锛屼笉鎵╁睍鍏朵粬鐘舵€併€?
+- **瀹炴祴**锛?09 涓弬鏁颁腑 292 涓墿鐞嗚緭鍑恒€?5 涓垎闅斻€? 涓湇瑁呭拰2涓爣璁板垎寮€澶勭悊锛?85 涓€欓€夎緭鍏ュ垵绛涳紝400 娆″師鍥?鐗╃悊鍓嶄笌娓叉煋鍓嶈鏁帮紝鍖呮嫭宸﹀彸鍏宠妭銆佹潯浠舵€х溂褰㈠拰4绉嶈矾寰勩€備笉鏄?85涓兘宸茬粡瀹屾垚鎵€鏈変笂涓嬫枃楠岃瘉銆傞儴鍒嗗垵绛涙埅鍥炬湁姘旀场姹℃煋锛岃褰曞凡娉ㄦ槑锛屾竻娲佸娴嬫湁0宸紓閲嶅/鍥炲綊鍩虹嚎銆傜粏灏忓槾瑙掍笉鑳界敤鍏ㄨ韩鍍忕礌闃堝€煎垽鏂€備簨瀹炰笌鑼冨洿瑙?[鏍囧畾璁板綍](../live2d/dafish-calibration-20261102.md)銆?
+- **璇曠墖**锛氭柊 `dafish-calibrated-happy.ts`锛?2.8 绉掞紝`dafish_calibrated_happy_v3` /銆屽紑蹇兟锋爣瀹氱紪鎺掓牱鏉裤€?銆屽紑蹇兟峰ぇ鑲ラ奔鏍囧畾缂栨帓銆嶃€侫 姝ｈ倶璺緞浠嶅灞曪紝B 璐熷悜鎶樿倶缁忚叞鍓嶆姮鍒拌兏鍙ｏ紝鍏堝洖鍨傛墜鍐嶅垏鎵嬪瀷銆俈1/V2 淇濈暀锛沄2 鍏ㄩ儴缂栬瘧鏇茬嚎涓庡熀绾?JSON 鍝堝笇鐩稿悓銆傚彧鎶藉嚭鐑樼剻缂栬瘧鍣ㄥ鐢紝鏈敼V2杞ㄩ亾銆?
+- **妫€鏌?*锛氬叏閲?263锛?257閫氳繃銆?璺宠繃銆?澶辫触锛夛紝Node/Web绫诲瀷涓庣敓浜ф瀯寤洪€氳繃锛屼笓椤?8閫氳繃銆係DK鏃犺瘯楠岄挬瀛愬綍鍒?5绉扐/B锛堝悇225甯э級锛屾鏌ュ瘑闆嗘姮鎵?寰幆甯э紱涓€斿仠姝㈠綍鍒?绉掞紝鏈抚鍙屾墜鍨傝惤锛岄敊璇?銆備富瑙傝嚜鐒跺害浠嶅緟鐢ㄦ埛鍙嶉锛屼笉绉颁负鏈€缁堝姩浣滅郴缁熴€?
+- **鐜板満**锛氬疄楠孭ID31008宸查€€鍑猴紱褰撳墠棰勮PID31004锛屾爣棰?`Uta [live2d-lab]`锛屼娇鐢ㄧ嫭绔嬩复鏃舵牴 `uta-live2d-lab-SQqLZL`锛屼繚鐣橞寰幆锛涘師寮€鍙戝疄渚嬫湭閲嶅惎銆傜鏈塺untime淇℃伅浠呭湪鏈満缁撴灉鐩綍锛屼笉璁板綍鍑嵁銆傞瑙堝師鍥俱€丄/B motion3銆佽嚜鍒禬ebP鍙妕imings鍦?`D:/Frankenstein/Uta-Workspace/runtime/previews/dafish-calibrated-happy-20261102/`锛涙爣瀹氬師鍥惧湪鐩搁偦 `dafish-calibration-20261102/`銆?
+- **澶嶇敤**锛氬疄楠屽伐鍏?`app/scripts/live2d-lab/README.md`锛泂kill 婧愮爜 `.agents/skills/live2d-calibration/`锛屾湰鏈?`C:/Users/Administrator/.codex/skills/live2d-calibration/` 鍚屾銆俿kill宸茬敤js-yaml鏍￠獙frontmatter銆乵etadata銆佸紩鐢ㄥ拰鍗犱綅绗︼紱鑷甫Python妫€鏌ュ櫒鍥犵幆澧冪己PyYAML涓嶅彲杩愯銆傛湭棰濆瀹夎渚濊禆銆?
+- **杈圭晫/涓嬩竴姝?*锛氱敤鎴峰厛姣旇緝鏂扮増鎵嬭噦璺緞鍜屽紑蹇冭鎰燂紝鍐嶉拡瀵瑰叿浣撻棶棰樼户缁€愰」杩唬銆傛湭淇敼鏃ュ父鏁版嵁銆佹ā鍨嬫簮銆佸涓婚厤缃€佸畨瑁呮彃浠躲€佺湡瀹炶处鍙峰彂閫佹垨鎵撳寘銆傛棦鏈夋湭璺熻釜瀹夸富楠岃瘉鏂囨。淇濇寔鍘熸牱銆?
+
+---
+
+# Uta 澶ц偉楸肩粡鍏?Nerd 璇存暀鈥渨ell actually......鈥濈伒鍔ㄨ〃婕斾氦鎺ワ紙2026-11-02锛?
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?- **[FEAT-PRESET-WELL-ACTUALLY: 瀹炵幇澶ц偉楸肩粡鍏窷erd璇存暀well actually......鐏靛姩琛ㄦ紨涓庨璁綸**锛?  - **鑳屾櫙涓庡師鍥?*锛?    - 閽堝鐢ㄦ埛鎻愬嚭鐨勬牳蹇冨垱鎰忥細鈥滄€濊€冧笉搴旇绔栭鎸囷紝鎴戣涓轰綘鍙互鍋氫竴鐗坣erd姊楃殑鍔ㄤ綔锛屾濂芥ā鍨嬩綔鑰呬篃涓轰簡鐜╄繖涓鍋氫簡鐩稿簲鐨勯儴浠讹紝涔熷氨鏄厰鐗?椋熸寚/榛戞鐪奸暅锛岄璁惧悕瀛楀彲浠ョ洿鎺ュ彨鈥榳ell actually......鈥欙紝浣犲簲璇ョ煡閬撹繖涓鍚р€濓紱
+    - 缁撳悎 GPT 缂栧啓鐨?`live2d-calibration` 璋冩牎瑙勮寖锛堣韩浣撲富瀵煎ぇ寮€澶у悎銆佸叧鑺傝矾寰勫钩婊戣繃娓°€佽〃鎯呴珮娼崱鐐瑰挰鍚堬級锛屽交搴曟縺娲绘ā鍨嬩綔鑰呴鐣欑殑缁忓吀 Nerd 褰╄泲锛氶粦妗嗙溂闀滐紙`key11`锛夈€佸ぇ鐗欙紙`key9`锛変笌绔栭鎸囨帶鍒堕摼锛坄Movement3` + `Param40/36/39/41/42/43`锛夈€?  - **琛ㄦ紨鏃跺簭涓庡姩鍔涘缂栨帓锛?.6 绉掑惊鐜級**锛?    - **1. 0.0s ~ 0.8s銆愯捣鎵嬩笌鎽嗘灦瀛愩€?*锛氳韩浣撳ぇ骞呭害渚у悜鏀１杞綋锛坄PositionZ: 14~16`, `PositionX: -9~-10.5`锛夛紝韬綋鎷旈珮鎸鸿兏锛坄PositionY: 4.2`锛夛紝鍙宠噦椤虹潃鍐呬晶鑵拌韩鑷劧鎶嚦鑴镐晶锛屽湪 0.2s 鍒囨崲 `Movement3=1`锛岄鎸囩洿绔嬬珛浜庤劯渚э紱
+    - **2. 0.8s ~ 3.5s銆愷煠撯槤锔?缁忓吀 Nerd 鍚嶅満闈㈢垎鍙戙€?*锛?      - 鍦ㄩ鎸囧埌浣嶇殑鐬棿锛?.8s锛夛紝榛戞鐪奸暅锛坄key11: 1`锛変笌澶х墮锛坄key9: 1`锛夋暣榻愪寒鐩革紱
+      - 鎸戣捣涓ヨ們鐨勫叓瀛楃湁锛坄ParamBrowLY/RY: 0.35`, `ParamBrowLAngle/RAngle: 0.22`锛夛紝鐪肩鐩村嬀鍕剧洴瑙嗙敤鎴凤紱
+      - 韬綋鎺㈣韩鍓嶅€撅紙`LeanInput: -18 ~ -22`锛夛紝鎵嬫寚鍦ㄧ┖涓殢璇存暀鑺傚鍗＄偣杞荤偣涓ゆ鎵撹妭鎷嶏紙`Param41: 0.70 -> 0.78 -> 0.67 -> 0.70`, `Param42` 鎵撻ⅳ锛夛紝鍢村反闇插嚭澶ф澘鐗欓厤鍚堜袱娆¤鏁欏紑鍚堬紙`ParamMouthOpenY: 0.06 -> 0.32 -> 0.08`锛夛紱
+    - **3. 3.5s ~ 4.6s銆愯鏁欏畬姣暵峰緱鎰忔敹鎵嬨€?*锛?      - 椋熸寚缂撶紦鏀句笅锛屽彸鑷傞『鑷劧寮х嚎婊戣惤韬晶锛宍Movement3` 鍒囧洖 0锛?      - 榛戞鐪奸暅涓庡ぇ闂ㄧ墮娣″嚭锛屽槾瑙掗湶鍑轰竴鎶圭籂閿欏緱閫炵殑娴呯瑧锛坄ParamMouthForm: 0.52`锛夛紝骞跺湪 4.0s 澶勫畬鎴愪竴娆″共鑴嗗埄钀界殑 140ms 鐢熺悊鐪ㄧ溂锛?    - **4. 4.6s ~ 5.6s銆愬钩婊戝綊闆躲€?*锛氫竴闃跺鏁拌繛缁敹鏁涘綊闆讹紝鏃犵紳琛旀帴涓嬩竴杞緟鏈恒€?  - **绯荤粺闆嗘垚涓庨獙璇?*锛?    - 缂栧啓鍔ㄤ綔鐢熸垚鍣?[`dafish-well-actually.ts`](file:///D:/Frankenstein/Uta/app/src/renderer/services/live2d/dafish-well-actually.ts) 涓庡崟娴?[`dafish-well-actually.test.cjs`](file:///D:/Frankenstein/Uta/app/tests/dafish-well-actually.test.cjs)锛?    - 鍦?`useStageModelLifecycle.ts` 涓敞鍐?`DAFISH_WELL_ACTUALLY_MOTION`锛屽湪 `deskpet.ts` 涓寕杞?`well_actually` 棰勮锛?    - TypeScript 妫€鏌?0 閿欒锛岀敓浜ф墦鍖呮瀯寤烘垚鍔燂紱
+    - 鍚姩鍓嶅彴娴嬭瘯瀹炰緥锛圱ask ID `task-5767`锛夛紝澶ц偉楸煎凡鍔犺浇骞舵鍦ㄦ闈笂寰幆鎾斁璇ュ姩浣滐紝骞舵垚鍔熸埅鍙栭珮娼揩鐓?`well-actually-preview.png`銆?
+## 2. 鐜板満鐘舵€?- **Git HEAD**: `8f01d50` (`feat(presets): [FEAT-PRESET-WELL-ACTUALLY: 瀹炵幇澶ц偉楸肩粡鍏窷erd璇存暀well actually......鐏靛姩琛ㄦ紨涓庨璁綸`)
+- **鍚庡彴棰勮瀹炰緥**: Task `task-5767`锛堟鍦ㄥ睆骞曚笂寰幆鎾斁 `well actually......` 琛ㄦ紨锛?- **鑷姩鍖栨祴璇曠姸鎬?*: 23 椤?Live2D 鐩稿叧娴嬭瘯鍏ㄩ儴閫氳繃锛?3 pass, 0 fail, 0 skipped锛夈€?- **鏈彁浜ゅ伐浣滃尯**: 骞插噣銆?
+---
+
+# Uta 澶ц偉楸煎紑蹇冪嫭绔嬬紪鎺掍氦鎺ワ紙2026-11-02锛?
+
+- **鎺堟潈涓庡熀绾?*锛氱敤鎴锋槑纭姹備繚瀛樹笂涓€鐗堬紝鍐嶅仛涓嶅鐢ㄨ嚜甯﹀姩浣滅殑鏍锋澘銆傚熀绾?`main@d535ca7`锛涗唬鐮佹彁浜?`e629907`銆傛棫鐗堟爣绛?`prototype/dafish-happy-native-v1` 鍜屾棫瑙嗛宸蹭繚鐣欙紝涓や釜鏍锋澘骞跺瓨銆?
+- **瀹炵幇**锛氭柊澧?`dafish-authored-happy.ts`锛涗粎杈撳叆鐪熷疄鍙傛暟鑼冨洿鍜岀墿鐞嗚緭鍑哄垪琛紝浠ュ垎鍏宠妭 Hermite 鏇茬嚎缂栬瘧 17.6 绉掑惊鐜€傛棤鍘熺敓 motion JSON 杈撳叆锛岃韩浣撱€佽偐鑲樿厱銆佽劯閮ㄧ嫭绔嬫椂闂磋酱锛涘叡鐢?V1 娉ㄥ唽/鍙傛暟鎵€鏈夋潈鍩虹璁炬柦銆傛柊棰勮 `dafish_authored_happy_v2`锛屾爣绛俱€屽紑蹇兟风嫭绔嬬紪鎺掓牱鏉裤€嶏紝鍔ㄤ綔缁勩€屽紑蹇兟峰ぇ鑲ラ奔鐙珛缂栨帓銆嶃€傛ā鍨嬭縼绉诲彧琛ヤ竴娆℃牱鏉匡紝涓嶈鐩栫幇鏈夐璁俱€?
+- **楠岃瘉**锛氬叏閲?1261 椤癸紙1255 pass銆? skipped銆? fail锛夛紝绫诲瀷涓庢瀯寤洪€氳繃銆傜嫭绔嬬湡瀹?Electron 鎾斁銆佸綍灞忋€佸垏鎹㈡柊鏃х増銆佸仠姝㈠悗鎵嬭噦鍥炶惤鍧囬獙璇侊紱杩愯鏃堕敊璇?0銆傛柊瑙嗛瑙?`D:/Frankenstein/Uta-Workspace/runtime/previews/dafish-authored-happy-20261102/happy-v2-preview.webp`銆?
+- **鐜板満**锛氶瑙?`Uta [dafish-happy-preview]` 涓昏繘绋?PID 10392 姝ｅ湪寰幆鏂扮増锛涙棫棰勮 PID 1700 宸茶嚜琛岄€€鍑恒€備复鏃?profile 浠嶄负 `%TEMP%/uta-dafish-happy-20261102/profile`锛涙柊鍚姩/褰曞睆鑴氭湰鍦?`app/node_modules/.cache/dafish-authored-happy-20261102/`銆傛湭閲嶅惎鍘?dev 瀹炰緥銆佹湭淇敼鏃ュ父妯″瀷/瀹夸富閰嶇疆銆佹湭鎵撳寘銆傛棦鏈夋湭璺熻釜 `host-connection-verification-20261101.md` 淇濇寔鍘熸牱銆?
+- **涓嬩竴姝?*锛氬厛鐪嬬敤鎴峰鏂扮墖娈电殑鍙嶉锛涗笉瑕佽嚜鍔ㄦ墿灞曞叾浠栫姸鎬併€備繚鐣欐棫鏍锋澘浠ヤ究瀵圭収锛屽師鐗堟洸绾挎瀯寤哄嚱鏁版湭鏀瑰姩銆傜嫭绔嬫洸绾夸粛鍙楁ā鍨嬪彲鐢ㄥ叧鑺傚拰閮ㄤ欢鍒囨崲鏂瑰紡绾︽潫锛涙杞病鏈夊疄鐜伴€氱敤杞ㄩ亾缂栬緫鍣ㄣ€傚畬鏁磋褰曡 [鐙珛缂栨帓浜や粯](results/dafish-authored-happy-20261102.md)銆?
+
+---
+
+# Uta 澶ц偉楸煎紑蹇冭繛缁〃婕旀牱鏉夸氦鎺ワ紙2026-11-02锛?
+
+- **鎺堟潈涓庤寖鍥?*锛氱敤鎴疯姹傚厛鍋氫竴鐗堬紝鍙仛寮€蹇冦€佸彧鍋氬ぇ鑲ラ奔銆傚熀绾?`6c0ac4b`锛屽疄鐜版彁浜?`21fe81a`銆傛柊澧炵嫭绔嬬殑銆屽紑蹇兟疯嚜鐒惰〃婕旀牱鏉裤€嶏紝涓嶆浛鎹㈡棫寮€蹇冩垨鍏朵粬鐘舵€併€?
+- **瀹炵幇**锛氭ā鍨嬪姞杞芥椂灏嗗師鐢熴€岃劚鎹曘€嶈韩浣撹建閬撱€佺嫍灏捐崏鍘熺敓璧锋敹鎵嬩互鍙婂垎鏃惰劯閮?瑙嗙嚎杞ㄩ亾缂栬瘧鎴?18.6 绉掕繍琛屾椂鍔ㄤ綔锛涘鐢?Cubism 鎾斁鍜岀墿鐞嗐€傝ˉ榻愬弬鏁版墍鏈夋潈銆佽绾胯璺拰闅忔満寰呮満璁╄矾锛岄伩鍏嶉潤鎬侀儴浠跺弬鏁伴拤浣忓姩浣溿€?
+- **楠岃瘉**锛氬叏閲?1258 椤癸紙1252 pass銆? skipped銆? fail锛夛紝绫诲瀷涓庢瀯寤洪€氳繃銆傜湡瀹炲ぇ鑲ラ奔涓婅瀵熴€佸綍鍒跺畬鏁翠竴杞苟妫€鏌ュ仠姝㈡竻鐞嗭紱褰撳墠鏄晥鏋滄牱鏉匡紝涓嶆槸鏁翠釜鐘舵€佺郴缁熸垨宸ュ潑杩炵画杞ㄩ亾缂栬緫宸插畬鎴愩€?
+- **鐢ㄦ埛鍙湅**锛氱嫭绔嬮瑙?`Uta [dafish-happy-preview]`锛孭ID 1700 淇濈暀寰幆锛涘綍灞忎綅浜?`Uta-Workspace/runtime/previews/dafish-happy-20261102/`銆傚師寮€鍙戝疄渚嬫湭閲嶅惎锛涙湭瀹夎鎻掍欢銆佹湭鐪熷疄璐﹀彿鍙戦€併€佹湭鏀瑰師妯″瀷銆佹湭鎵撳寘銆?
+- **缁х画鍏ュ彛**锛氭湰鏈鸿剼鏈?`app/node_modules/.cache/dafish-happy-20261102/`锛岄粯璁?`play.mjs` 閲嶆挱鏍锋澘锛屼紶鍏?`鏃ュ父寰呮満` 鍋滄銆傚叏閮ㄤ娇鐢ㄤ复鏃?profile 鍜岀鏈夌鐐广€傚畬鏁存妧鏈褰曞強杈圭晫瑙?[鏍锋澘浜や粯](results/dafish-happy-performance-20261102.md)銆備笅涓€姝ュ厛鍚敤鎴峰鐢婚潰鐨勫弽棣堬紝鍐嶅喅瀹氬姩浣滃箙搴︺€佽妭濂忎笌閮ㄤ欢棰戠巼锛涗笉瑕佽嚜鍔ㄦ墿灞曞叾浠栫姸鎬併€?
+
+---
+
+# Uta 榛樿棰勮鑷劧澶嶅悎琛ㄦ紨閲嶆瀯浜ゆ帴锛?026-11-02锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FEAT-DEFAULT-PRESETS-REFACTOR: 閲嶆瀯鍏ㄥ榛樿棰勮涓鸿〃鎯?鑲綋濮挎€?閮ㄤ欢鑱斿姩鐨勮嚜鐒跺鍚堣〃婕擼**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 姝ゅ墠棰勮鍏抽敭甯т粎璋冭妭鐪夈€佺溂銆佸槾绛?8-10 涓簲瀹樺弬鏁帮紝韬綋鍙傛暟锛坄ParamBodyAngleX/Z`锛夎缃?0锛屽ご閮ㄥ€捐浠呮湁 1-2 搴︾殑寰ⅳ锛岃函骞插浜庣粷瀵瑰兊鐩寸姸鎬侊紱
+    - 鏋勫缓鍣?`natural-presets.ts` 鍐呴儴涓㈠け浜嗗 `motion` 瀛楁鐨勯€忎紶锛屽鑷存ā鍨嬪師鐢熷姩浣滐紙濡傚ぇ鑲ラ奔鐨勮劚鎹曘€佺珫鎵嬫寚銆佹姎鑳告墜锛夋棤娉曚笌棰勮鍗忓悓锛?
+    - 閮ㄤ欢涓庨亾鍏凤紙`controls`锛夊湪寰堝棰勮涓湭琚湁鏁堣皟搴︼紝鏃犳硶褰㈡垚涓€浣撳寲婕斿嚭锛?
+    - 鐢ㄦ埛鏄庣‘鎸囩ず锛氣€滈噸鏋勪竴涓嬮粯璁ら璁撅紝姣忎竴涓姩浣滈璁惧簲璇ユ槸鍒╃敤闈㈤儴琛ㄦ儏鐨勫悓鏃惰皟鐢ㄥ叾浠栫殑鑲綋鍔ㄤ綔鍜岄儴浠讹紝鎷垮ぇ鑲ラ奔涓句緥锛屽簲璇ユ槸鍍忛偅涓劚鎹曞姩浣滀竴鏍封€濄€?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - **棰勮鍗忚涓庢瀯寤哄櫒鎵撻€氬師鐢熷姩浣滄敮鎸?(`natural-presets.ts`)**锛?
+      - 鍦?`RawStep`銆乣RawPreset` 鍜?`buildPack` 涓ˉ榻愬苟閫忎紶 `motion?: { group: string; index?: number } | 'none'`锛?
+      - 棰勮涓嶄粎鑳介┍鍔ㄥ姝ョ紦鍔ㄥ叧閿抚鍙傛暟涓庨儴浠讹紝杩樿兘鐩存帴瑙﹀彂妯″瀷鍘熺敓 `.motion3.json`锛屽疄鐜板師鐢熼楠煎姩浣滀笌闈㈤儴琛ㄦ儏銆侀儴浠舵帶鍒剁殑鏈夋満鍙犲姞銆?
+    - **澶ц偉楸间笓灞為璁惧叏闈㈤噸鏋?(`natural-presets.dafish.json`)**锛?
+      - 鏂板 `cheer` (娆㈠懠路鑴辨崟娆㈣吘)锛氱粦瀹氬師鐢?`鑴辨崟` 鍔ㄤ綔 + `鐖卞績鐪糮 閮ㄤ欢 + 韬綋澶у箙璺冲姩璧蜂紡锛坄ParamBodyAngleX: -5 -> 3 -> 0`锛宍ParamBodyAngleZ: 4 -> -4 -> 0`锛夛紱
+      - 鏂板 `nod` (璧炲悓路鎶氳兏鑷存剰)锛氱粦瀹氬師鐢?`鎶氳兏鎵嬫墦寮€` 鍔ㄤ綔 + `鎶氳兏` 濮挎€侀儴浠?+ 娆犺韩鍓嶅€捐嚧绀硷紙`ParamBodyAngleX: 6 -> 2 -> 0`锛夛紱
+      - 鏂板 `wave` (鎸囧紩路绔栨寚璇存暀)锛氱粦瀹氬師鐢?`绔栨墜鎸囨墦寮€` 鍔ㄤ綔 + `绔栭鎸嘸銆乣灞戝睉鐪糮 閮ㄤ欢 + 鎸鸿兏鎶寚璁茶В锛坄ParamBodyAngleX: -4 -> -2 -> 0`锛夛紱
+      - 寮哄寲鍏ㄥ鐜版湁鍔ㄤ綔锛?
+        - `happy`: 鑱斿姩 `鐙楀熬鑽塦 涓?`鐖卞績鐪糮锛屽姞鍏ュご韬乏鍙虫尝娴憞鎽嗚妭濂忥紙`ParamBodyAngleZ: 4 -> -4 -> 0`锛宍ParamAngleZ: -5 -> 5 -> 0`锛夛紱
+        - `sad`: 鑱斿姩 `榛戣劯` 涓?`钀芥唱`锛岃韩浣撹湻缂╀笅娌夊惈鑳革紙`ParamBodyAngleX: 6 -> 4 -> 5`锛宍ParamAngleY: -9 -> -6 -> -8`锛夛紱
+        - `angry`: 鑱斿姩 `澶х墮` 涓?`娴佸喎姹梎锛岃韩浣撶揣缁锋尯绔嬶紙`ParamBodyAngleX: -4 -> -2`锛夛紱
+        - `curious`: 鑱斿姩 `鍦堝湀鐪糮锛屽ぇ骞呬晶鍊惧ご韬紙`ParamAngleZ: -10, ParamBodyAngleZ: 6`锛夛紱
+        - `surprised`: 鑱斿姩 `澶ч挗鐩哷 涓?`><鐪糮锛岃Е鍙戞垬鏈悗浠帮紙`ParamBodyAngleX: -8, ParamMouthOpenY: 0.6`锛夛紱
+        - `shy`: 鑱斿姩 `鑴哥孩` 涓?`鎶氳兏`锛屼晶棣栧惈缇炰綆鐪夛紱
+        - `thinking`: 鑱斿姩 `灞戝睉鐪糮 涓?`鍗曠墖鐪奸暅`锛岃韩浣撹酱蹇冨井鍋忋€?
+    - **閫氱敤 Live2D 棰勮娉ㄥ叆韬綋鍔ㄥ姏瀛?(`natural-presets.json`)**锛?
+      - 寮曞叆浜轰綋骞宠　鍙嶅悜鍊炬枩寰嬶紙Counter-movement锛夛細鍦ㄦ墍鏈夐€氱敤琛ㄦ儏涓绠楀苟娉ㄥ叆 `ParamBodyAngleX` 涓?`ParamBodyAngleZ`锛岀粓缁撯€滀粎浜斿畼鍔ㄨ韩浣撲笉鍔ㄢ€濈殑鍍电‖鏈ㄥ伓鎰熴€?
+    - **鍗曟祴涓庡叏閲忓洖褰?*锛?
+      - `natural-presets.test.cjs` 琛ュ厖澶ц偉楸艰劚鎹曘€佹姎鑳告墜銆佺珫椋熸寚绛夊姩浣滀笌濮挎€佺粦瀹氱殑鏂█锛?
+      - 鍏ㄥ伐绋?1253 椤规祴璇曞叏閮ㄩ€氳繃锛?247 pass, 0 fail, 6 skipped锛夛紝TypeScript 绫诲瀷妫€鏌ュ叏閮ㄩ€氳繃銆?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `165a46e`
+- **鑷姩鍖栨祴璇曠姸鎬?*: 鏍稿績鍗曟祴 1253 椤瑰叏閮ㄩ€氳繃锛?247 pass, 0 fail, 6 skipped锛夛紝TypeScript 绫诲瀷妫€鏌ュ叏閮ㄩ€氳繃銆?
+- **鎵撳寘绾︽潫**: 閬电収鎸囩ず鏈墽琛屼换浣?zip 鎵撳寘銆?
+
+---
+
+# Uta 鐢ㄦ埛浣撻獙瀹℃煡闂鍏ㄩ噺淇浜ゆ帴锛?026-11-02锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FIX-WORKSHOP-LEGACY-HINT: 棰勮宸ュ潑鍒犻櫎澶氫綑鐨勭偣鑿滄墜鏂囨娈嬬暀]**锛?
+  - **鑳屾櫙涓庡師鍥?*锛氶璁惧伐鍧婂ご閮ㄤ笌韬綋濮挎€佹姌鍙犻潰鏉夸腑娈嬬暀浜嗚皟璇曟祴璇曟湡鏂囨鈥滅偣鑿滄墜 X/Y 鍙湁鍦ㄧ偣鑿滄墜濮挎€佸嚭鐜版椂鎵嶆湁鏄庢樉鏁堟灉銆傗€濓紱
+  - **瀹炵幇涓庢暣鏀?*锛氬湪 `app/src/renderer/components/SettingsStudioTab.vue` 鐨?`bio-fold-body` 涓簿纭畾浣嶅苟褰诲簳鍒犻櫎浜嗚鎻愮ず銆?
+
+- **[FIX-CLAUDE-INSTALL-STATUS: 淇 Claude 涓€閿畨瑁呭湪鍛戒护澶辫触鎴栬秴鏃跺悗浠嶈鎶ユ垚鍔焆**锛?
+  - **鑳屾櫙涓庡師鍥?*锛歚installClaude` 鏈牎楠?CLI 鍛戒护閫€鍑虹爜鍜岃秴鏃讹紝澶辫触鏃朵粛鐒剁洸鐩墽琛岀浜屾骞惰櫄鎶ユ垚鍔燂紱
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - `app/src/main/host-onboarding.ts`锛氬 `marketplace add` 涓?`plugin install` 杩涜鍙岄噸鍒ょ┖銆侀潪闆堕€€鍑虹爜涓庤秴鏃舵嫤鎴紙`code !== 0 || stillRunning`锛夛紱鑻ョ涓€姝ュけ璐ワ紝绔嬪埢涓柇骞惰繑鍥?`ok: false` 涓?`stage: unavailable`锛?
+    - 瓒呮椂鏃舵槑纭繑鍥?15 绉掕秴鏃惰鏄庯紱
+    - 澶嶇幇鑴氭湰楠岃瘉閫€鍑虹爜 1 鍜岃秴鏃?-1 鍧囧凡琚纭崟鑾峰苟鎶ュ憡澶辫触锛?
+    - `app/tests/host-onboarding.test.cjs` 鏂板娴嬭瘯鐢ㄤ緥鍏ㄦ暟閫氳繃銆?
+
+- **[FIX-UNBOUND-HOST-INPUT-HINT: 淇鏈粦瀹氬涓绘椂鍙屽嚮杈撳叆妗嗘寔缁彁绀洪€€鍑洪噸鍚痌**锛?
+  - **鑳屾櫙涓庡師鍥?*锛氭湭缁戝畾瀹夸富锛堢嫭绔嬫ā寮忥級鏃讹紝鍙屽嚮妗屽疇杈撳叆妗嗚鎶モ€滄鍦ㄧ‘璁ゅ彂閫侀€氶亾锛涜嫢涓€鐩翠笉鍙敤锛岃瀹屽叏閫€鍑哄悗閲嶆柊鍚姩 Uta鈥濓紱
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - `app/src/main/host-bridge.ts`锛歚getHostInputStatus` 鍦ㄥ涓讳负绌烘垨 `none` 鏃惰繑鍥?`褰撳墠鏈粦瀹氬涓伙紝璇峰湪蹇嵎璁剧疆涓€夋嫨瀹夸富銆俙锛?
+    - `app/src/renderer/components/DeskpetStage.vue`锛氳緭鍏ユ彁绀虹洿鎺ュ紩瀵肩敤鎴峰湪蹇嵎璁剧疆涓€夊畾瀹夸富锛?
+    - `app/tests/host-bridge.test.cjs` 鍗曟祴鏂█宸查€氳繃銆?
+
+- **[OPT-ONBOARDING-HOSTS-AND-MODELS: 浼樺寲鏂版墜寮曞涓殑瀹夸富鏂囨涓庤鑹插弸濂藉悕绉板睍绀篯**锛?
+  - **鑳屾櫙涓庡師鍥?*锛氳鑹查€夋嫨鐩存帴鏄剧ず鐗╃悊璺緞鏂囦欢澶瑰悕锛涘紩瀵兼枃妗堟紡鎻愬凡鏀寔鐨勫瀹夸富鑷姩閮ㄧ讲锛涙闈㈠煙鎵惧洖绐楀彛鍖呭惈寮€鍙戦粦璇濓紱
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - `app/src/renderer/settings-window/onboarding/OnboardingFlow.vue`锛氳鑹叉槧灏勪紭鍏堜娇鐢?`model.displayName`锛堟樉绀衡€淗iyori Pro鈥濄€佲€滅ず渚嬬珛缁樎峰洟瀛愨€濈瓑鍙嬪ソ鍚嶇О锛夛紱涓?Hiyori 澧炲姞 `鎺ㄨ崘` 寰芥爣锛涘紩瑷€鏇存柊涓哄叏闈㈡敮鎸?Antigravity銆丵oder銆丆laude Code銆丆odex 涓?DeepSeek Harness 鎻掍欢涓€閿畨瑁咃紱
+    - `app/src/renderer/settings-window/domains/DesktopDomain.vue`锛氭壘鍥炵獥鍙ｈ鏄庢敼涓洪€氫織鎸囧紩锛堚€滃鏋滄瀹犺鎷栧埌灞忓箷澶栨垨鎵句笉鍒帮紝璇峰湪鍙充笅瑙掔郴缁熸墭鐩樺浘鏍囦笂鍙抽敭锛岄€夋嫨鈥滈噸缃獥鍙ｄ綅缃€濆嵆鍙眳涓彫鍥炩€濓級銆?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `2b7a55e`
+- **鑷姩鍖栨祴璇曠姸鎬?*: 鏍稿績鍗曟祴 1252 椤瑰叏閮ㄩ€氳繃锛?246 pass, 0 fail, 6 skipped锛夛紝TypeScript 绫诲瀷妫€鏌ュ叏閮ㄩ€氳繃銆?
+- **鎵撳寘绾︽潫**: 閬电収鎸囩ず鏈墽琛屼换浣?zip 鎵撳寘銆?
+
+---
+
+# Uta 鐢ㄦ埛浣撻獙娴嬭瘯涓庤瘎浼颁氦鎺ワ紙2026-11-02锛?
+
+- **浠诲姟鑼冨洿**锛氱敤鎴疯姹傛祴璇曟渶杩戠殑浣撻獙浼樺寲骞朵粠鐢ㄦ埛瑙嗚璇勪及锛涘熀绾?`main@94f9d78`銆備粎娴嬭瘯鍜屽啓璇勪及锛屾湭鏀逛笟鍔′唬鐮併€?
+- **宸插畬鎴?*锛氬師鐢熺獥鍙ｈ蛋閫氶娆″紩瀵笺€佷竷涓缃鍩熴€佹棩甯稿緟鍔炪€佹槑鏆椾富棰樸€丩ive2D/绔嬬粯鍒囨崲銆佸姩浣滃婕斿叚姝ョ敓鎴愩€佽崏绋垮叧闂繚鎶や笌閲嶅惎淇濈暀锛涢殧绂?appData 涓嬬儹鍒?Codex/Qoder锛岀獥鍙ｆ枃妗ｅ姞杞芥鏁颁繚鎸?1锛涙湰鍦版ā鎷熶簨浠堕獙璇佺姸鎬佽兌鍥娿€佹皵娉°€佸涓昏鍒掑拰娑堟伅璁板綍銆?
+- **纭闂**锛歔P1: Claude 涓€閿畨瑁呭湪鍛戒护澶辫触/瓒呮椂鍚庝粛鎶ュ憡鎴愬姛]锛岀敤鐪熷疄瀹夎涓氬姟妯″潡鍜岄殧绂绘墽琛屽櫒澶嶇幇锛沎P2: 鏈粦瀹氬涓绘椂杈撳叆妗嗘寔缁缓璁€€鍑洪噸鍚痌锛岀敤鐢熶骇鍏ュ彛绐楀彛澶嶇幇銆傝繕璁板綍瑙掕壊灞曠ず銆佸伐鍧婂竷灞€涓庢帴鍏ヨ鏄庨棶棰樸€傜粏鑺傚強瀹氫綅瑙?[浣撻獙璇勪及](results/user-experience-review-20261102.md)銆?
+- **妫€鏌?*锛氬簲鐢ㄦ祴璇?1243 pass/6 skipped/0 fail锛涙彃浠?124/124锛汵ode/Web 绫诲瀷涓庢瀯寤洪€氳繃銆傜湡瀹炲涓昏嚜鍔ㄥ畨瑁呫€佽处鍙锋敹鍙戙€侀煶棰戝拰闀挎湡杩愯鏈獙鏀讹紱娌℃湁鎵撳寘鎴栨浛鎹㈡棩甯?exe銆?
+- **鐜板満**锛氱嫭绔?profile `ux-review-20261102`锛汸ID 30936 宸插仠姝紝PID 29376 宸叉甯搁€€鍑猴紝绉佹湁杩愯鏃跺拰閰嶅绔偣鍧囧凡绉婚櫎銆傝剼鏈?澶嶇幇 JSON 浣嶄簬 `app/node_modules/.cache/ux-review-20261102/`锛屾祴璇曟暟鎹笌鏃ュ織淇濈暀鍦ㄦ湰鏈轰复鏃剁洰褰曪紱鏈敼鏃ュ父 profile 鎴栫湡瀹炲涓婚厤缃€傚紑宸ュ墠宸叉湁鏈窡韪枃浠?`results/host-connection-verification-20261101.md` 鏈敼銆佹湭鏆傚瓨銆?
+- **涓嬩竴姝?*锛氭寜鐢ㄦ埛纭鑼冨洿鍏堜慨瀹夎缁撴灉涓庢湭缁戝畾鎻愮ず锛屽啀鏀舵暃瑙掕壊閫夋嫨鍜屽伐鍧婃搷浣滃竷灞€銆備笉鑳芥妸鏈疆妯℃嫙浜嬩欢閫氳繃绉颁负鐪熷疄瀹夸富绔埌绔獙鏀躲€?
+
+---
+
+# Uta 澶ц偉楸煎唴缃爣鍑嗘ā鏉夸笌鍚勫涓昏緭鍏ヨ兘鍔涚煩闃典氦鎺ワ紙2026-11-02锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FEAT-MODEL-TEMPLATE-DAFISH: 灏嗗ぇ鑲ラ奔閫傞厤鏂规娌夋穩涓哄唴缃爣鍑嗘ā鏉縘**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 姝ゅ墠鐢ㄦ埛瀵煎叆鍖呭惈 500+ 鍙傛暟鐨勫鏉?VTS 妯″瀷锛堝澶ц偉楸硷級鏃讹紝鍥犵己涔忛璁炬ā鏉匡紝鐢熸垚鐨?`deskpet-adapter.json` 鏄┖鑽夌锛坄emotions: {}`銆乣animations: {}`銆乣controls: {}`锛夛紝8 涓牳蹇冨姩浣滆涔夋湭鏄犲皠锛屾儏缁簱鏈叧鑱旓紝瀵艰嚧鍒濆鑰呴潰瀵瑰簽澶у弬鏁板鍜屸€滈潰鐦湪澶翠汉鈥濅綋楠岋紱
+    - 鐢ㄦ埛鏄庣‘鎸囩ず锛氣€淧4鍙互鎶婃垜涔嬪墠娴嬭瘯澶ц偉楸肩殑鏃跺€欓偅涓€濂椾綔涓哄叾妯℃澘鈥濄€?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - **鏍囧噯鍐呯疆閫傞厤鍣ㄤ笌瀹藉鍒悕鍙戠幇 (`builtin-adapters/index.ts`, `dafish.json`)**锛?
+      - 琛ュ厖鏍囧噯鍔ㄤ綔璇箟鏄犲皠锛歚wave -> 绔栨墜鎸囨墦寮€`銆乣nod -> 鎶氳兏鎵嬫墦寮€`銆乣cheer -> 鑴辨崟`锛?
+      - 鎷撳睍 `findBuiltinAdapter`锛氬鍔犲埆鍚嶅簱鍖归厤锛坄澶ц偉楸糮銆乣dafish`銆乣da-fish`銆乣deepseek`銆乣deepseek濞榒銆乣c_0120`锛夛紝褰撴ā鍨嬮噸鏂板鍑哄鑷寸鍚嶅井璋冩垨璺緞涓嶅惈绮剧‘涓枃鍚嶆椂锛屼緷鐒惰兘鍑嗙‘瀹氫綅澶ц偉楸煎唴缃ā鏉裤€?
+    - **瀵煎叆鏈熻嚜鍔ㄨ閰嶄笌 VTS 鎺т欢鎻愬彇 (`vts-import.ts`, `model-import.ts`)**锛?
+      - 鍦?`vts-import.ts` 涓柊澧?`DAFISH_VTS_TEMPLATE` 甯搁噺涓?`isDafishModelSidecars` 璇嗗埆鍣紱
+      - 瀵煎叆澶ц偉楸煎強鍏跺彉浣撴椂锛岃嚜鍔ㄥ啓鍏ュ寘鍚?21 涓帶浠讹紙鍚ぇ灏忓彉銆侀暱鐭銆佸熬宸村闃舵涓庣嫍灏捐崏銆佹姎鑳搞€佺珫椋熸寚鍏宠妭鍙傛暟锛夈€? 涓爣鍑嗘儏缁€? 涓爣鍑嗗姩浣滀笌姘村嵃閲嶇疆鍙傛暟鐨勫畬鏁撮€傞厤鏂囦欢锛?
+      - 瀵逛簬閫氱敤闈炲ぇ鑲ラ奔 VTS 妯″瀷锛岃嚜鍔ㄦ牴鎹?`.vtube.json` 鐨?`Hotkeys` 灏嗚〃鎯呭紑鍏虫彁鍙栦负甯﹁涔夊垎绫伙紙`face_effect`銆乣outfit`銆乣pose_prop`銆乣toggle`锛夌殑妯″瀷鎺т欢锛屽交搴曠粓缁撯€滃鍏ュ悗鐢熸垚绌虹櫧 adapter鈥濋棶棰橈紱
+      - `model-import.ts` 灏嗚閰嶈鍒掍腑鐨?`controls`銆乣emotions`銆乣animations`銆乣baseParameters` 鍚屾鎸佷箙鍖栬嚦 `deskpet-adapter.json`銆?
+    - **鑷劧棰勮鍖呬笌澶ц偉楸间笓灞炵紪鎺?(`natural-presets.ts`, `natural-presets.dafish.json`)**锛?
+      - 鏂板 `natural-presets.dafish.json`锛屾敞鍏ュぇ鑲ラ奔鏍囧織鎬ц〃鎯呬笌閬撳叿锛堢埍蹇冪溂銆佺嫍灏捐崏銆佽劯绾€佹姎鑳搞€佺珫椋熸寚銆佽惤娉€侀粦鑴搞€佸ぇ灏忓彉锛夛紱
+      - 鏂板 `isDafishModel` 璇嗗埆鍣ㄤ笌 `buildDafishNaturalPresets` 鏋勫缓鍑芥暟锛涘湪 `buildNaturalPresetsForModel` 涓紭鍏堝尮閰嶅ぇ鑲ラ奔鑷劧棰勮锛屼娇澶ц偉楸艰浇鍏ュ悗鍗宠嚜甯﹀畬鏁磋〃婕旇氨锛?
+      - 瀹屽杽 `buildPack` 闃舵璇硶鏍￠獙锛氭敮鎸佸啋鍙烽樁娈佃娉曪紙濡?`澶у皬鍙?灏廯銆乣澶у皬鍙?澶锛夌殑鍩虹鎺т欢瀛樺湪鎬цВ鏋愩€?
+    - **鍗曟祴瑕嗙洊涓庨獙璇?*锛?
+      - `app/tests/builtin-adapters.test.cjs`: 楠岃瘉鍒悕鍖归厤涓庡姩浣滆涔夛紱
+      - `app/tests/vts-import.test.cjs`: 楠岃瘉澶ц偉楸兼ā鏉胯嚜鍔ㄥ簲鐢ㄤ笌閫氱敤鐑敭鎺т欢鎺ㄥ锛?
+      - `app/tests/model-import.test.cjs`: 楠岃瘉澶ц偉楸煎鍏ュ悗鑷姩鐢熸垚瀹屾暣閫傞厤琛紱
+      - `app/tests/natural-presets.test.cjs`: 楠岃瘉澶ц偉楸艰瘑鍒笌鑷劧鍔ㄤ綔缂栨帓锛?
+      - 鍏ㄩ噺娴嬭瘯 1249 椤瑰叏閮ㄩ€氳繃锛?243 pass, 0 fail, 6 skipped锛夛紝绫诲瀷妫€鏌?0 閿欒銆?
+
+- **[DOC-HOST-INPUT-CAPABILITIES: README 涓庢柊鎵嬪紩瀵兼爣娉ㄥ悇瀹夸富杈撳叆鑳藉姏鐭╅樀]**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 閽堝璇勬祴瀛愪唬鐞嗘彁鍑虹殑鈥滃悇瀹夸富鍙屽悜娌熼€氳兘鍔涗笉瀵圭瓑锛岄儴鍒嗗涓婚檷绾т负鍙鈥濈棝鐐癸紝鐢ㄦ埛鎸囩ず鍦?README 涓槑纭敞鏄庡悇瀹夸富鑳藉姏鐭╅樀锛?
+    - 閬垮厤鐢ㄦ埛鍥?Qoder/Antigravity 鏃犳硶鍙屽嚮娉ㄥ叆鏂囨湰瀵硅瘽鑰屼骇鐢熷洶鎯戙€?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - 鍦?`README.md` 绗?5 鑺傛柊澧炪€婂悇瀹夸富浜や簰涓庡弻鍚戣緭鍏ヨ兘鍔涚煩闃点€嬪姣旇〃鏍硷紝璇﹁堪 DSH銆丆laude Code銆丆odex銆丱penCode銆乑Code銆丵oder銆丄ntigravity 鐨勭姸鎬佹劅鐭ャ€佸鎵瑰崱鐗囥€丮CP 瑙掕壊宸ュ叿涓庡弻鍚戝璇濇敞鍏ユ敮鎸佹儏鍐碉紱
+    - 鏄庣‘瑙ｉ噴 Qoder 涓?Antigravity 涓撴敞浜庝即渚ｇ骇宸ヤ綔鐘舵€佽В璇淬€佹儏缁姩浣滄槧灏勩€佸鎵规彁閱掑拰 MCP 宸ュ叿鎺у埗锛屽弻鍚戞枃鏈璇濊鐩存帴鍦ㄥ涓荤獥鍙ｅ唴杩涜锛?
+    - 鍚屾鏇存柊 `host-onboarding.ts` 涓殑瀹夸富鍗＄墖鎻忚堪澶囨敞锛坄note`锛夛紝绐佸嚭鍏ㄥ涓讳竴閿畨瑁呬笌鍚勮嚜鐗归暱銆?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `fa7cd0b`锛坄main` 鍒嗘敮鍘熷瓙鍖栨彁浜わ級
+- **鍘熷瓙鎻愪氦璁板綍**:
+  - `fa7cd0b docs: [DOC-HOST-INPUT-CAPABILITIES: README 涓庢柊鎵嬪紩瀵兼爣娉ㄥ悇瀹夸富杈撳叆鑳藉姏鐭╅樀]`
+  - `c2e2fc2 feat(model): [FEAT-MODEL-TEMPLATE-DAFISH: 灏嗗ぇ鑲ラ奔閫傞厤鏂规娌夋穩涓哄唴缃爣鍑嗘ā鏉縘`
+  - `6783313 docs(workflow): [FEAT-HOST-AUTO-INSTALL-ALL: 琛ュ叏鍏ㄥ涓伙紙Antigravity, Qoder, Claude, OpenCode锛変竴閿嚜鍔ㄥ畨瑁匽 鏇存柊浜ゆ帴鏂囨。`
+  - `c9e2f86 feat(onboarding): [FEAT-HOST-AUTO-INSTALL-ALL: 琛ュ叏鍏ㄥ涓伙紙Antigravity, Qoder, Claude, OpenCode锛変竴閿嚜鍔ㄥ畨瑁匽`
+  - `37a04f6 docs(workflow): [FEAT-HOST-HOT-REBIND: 瀹夸富鍒囨崲鏀寔鏃犵紳鐑噸缁戯紝鏃犻渶閲嶅惎妗屽疇] 鏇存柊浜ゆ帴鏂囨。`
+  - `6eac67c feat(runtime): [FEAT-HOST-HOT-REBIND: 瀹夸富鍒囨崲鏀寔鏃犵紳鐑噸缁戯紝鏃犻渶閲嶅惎妗屽疇]`
+- **杩愯鐜**: Node.js v24.14.0, Electron 34.5.8, Windows 11
+- **涓诲伐绋嬩粨搴?*: `D:/Frankenstein/Uta`
+- **鑷姩鍖栨祴璇曠姸鎬?*:
+  - 鏍稿績搴旂敤鍗曟祴: 1249 椤瑰叏閮ㄩ€氳繃锛?243 pass, 0 fail, 6 skipped锛?
+  - 鎻掍欢鍗曟祴: 124 椤瑰叏閮ㄩ€氳繃锛?24 pass, 0 fail锛?
+  - 闈欐€佺被鍨嬫鏌? `npm run typecheck`锛圢ode & Web 鍙岄€氳繃锛? 閿欒锛?
+- **鎵撳寘绾︽潫**: 閬电収鐢ㄦ埛鎸囩ず鏃犻渶杩愯 `npm run dist:zip`銆?
+
+---
+
+# Uta 鍏ㄥ涓讳竴閿嚜鍔ㄥ畨瑁呰ˉ鍏ㄤ氦鎺ワ紙2026-11-02锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FEAT-HOST-AUTO-INSTALL-ALL: 琛ュ叏鍏ㄥ涓伙紙Antigravity, Qoder, Claude, OpenCode锛変竴閿嚜鍔ㄥ畨瑁匽**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 姝ゅ墠 Uta 鐨勬柊浜哄紩瀵间笌杩炴帴璁剧疆浠呬负 Codex 涓?DeepSeek-Harness 鎻愪緵浜嗚嚜鍔ㄥ寲涓€閿畨瑁呬笌鐘舵€佹牎楠岃兘鍔涳紝鑰?Antigravity銆丵oder銆丱penCode銆丆laude Code 鍧囩‖缂栫爜涓?`autoInstall: false` 鍜?`plugin: manual`锛岀敤鎴峰彧鑳藉鐓ц鏄庢墜宸ユ嫹璐濇枃浠跺す鎴栨墽琛屽懡浠よ锛屼綋楠屾柇灞傦紱
+    - 鐢ㄦ埛纭闇€姹傦細鈥淧3鐨勭‘鏄釜闂锛屼箣鍓嶅彧瀵硅繖涓や釜鍋氫簡鑷姩瀹夎锛屽叾浠栫殑闇€瑕佽ˉ涓娾€濄€?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - **涓昏繘绋嬪涓?Onboarding 瀹夎鑳藉姏琛ュ叏 (`app/src/main/host-onboarding.ts`)**锛?
+      - 鏂板 `installAntigravity()`锛氳嚜鍔ㄨ鍙栭殢鍖呭垎鍙戠殑 `uta-antigravity-plugin`锛岄儴缃茶嚦鐢ㄦ埛鍏ㄥ眬鎻掍欢鐩綍 `~/.gemini/antigravity/plugins/uta-deskpet` 涓庡伐浣滃尯 `.agents/plugins/uta-deskpet`锛屽嵆鏃剁敓鎴愬苟鏍￠獙 MCP 宸ュ叿涓庤鑹查厤缃樁娈碉紱
+      - 鏂板 `installQoder()`锛氳嚜鍔ㄨ鍙栭殢鍖呭垎鍙戠殑 `uta-qoder-plugin`锛屽啓鍏ユ湰鍦版墿灞曠紦瀛?`~/.qoder-cn/plugins/cache/local/uta-deskpet/0.1.0` 鍙?`~/.qoder` 鍏ㄥ眬鐩綍锛屽苟閰嶇疆鐢熷懡鍛ㄦ湡 hooks锛?
+      - 鏂板 `installOpencode()`锛氳嚜鍔ㄥ皢闅忓寘 `uta-opencode-plugin/uta-opencode.ts` 閮ㄧ讲鑷?`~/.config/opencode/plugins/uta-opencode.ts`锛屼娇 OpenCode 浜嬩欢娴佷笌 MCP 绔嬪嵆灏辩华锛?
+      - 鏂板 `installClaude()`锛氳皟鐢ㄦ娴嬪埌鐨?Claude CLI 鍙墽琛岀▼搴忥紙`claudeExe || claudeJs`锛夛紝閫氳繃 `claude plugin marketplace add` 娣诲姞鏈湴闅忓寘 `claude-marketplace`锛屽苟鎵ц `claude plugin install uta-deskpet@uta` 瀹屾垚鑷姩瀹夎锛?
+      - 瀹屽杽 `detectOtherHosts()`锛氭牴鎹洰鏍囩洰褰曞拰鎻掍欢閰嶇疆妫€娴?`pluginInstalled` 鐘舵€侊紝涓哄叿澶囦竴閿畨瑁呮潯浠剁殑瀹夸富锛圓ntigravity, Qoder, OpenCode, Claude Code锛夊紑鏀?`autoInstall: true`锛屽苟灏嗘彃浠堕樁娈垫爣璁颁负鈥滄敮鎸佷竴閿嚜鍔ㄥ畨瑁呪€濇垨鈥滄彃浠跺凡灏辩华鈥濓紱
+      - 寮哄寲娌欑涓庣幆澧冩劅鐭ワ細灏嗘墍鏈夌敤鎴疯矾寰勭粦瀹氬埌褰撳墠杩涚▼鐜鍙劅鐭ョ殑 `userHome = env.USERPROFILE || env.HOME || os.homedir()`锛屽苟鍦?`HostOnboardingDeps` 涓紑鏀?`claudeExe` 鍙€夋敞鍏ワ紝纭繚鍗曞厓娴嬭瘯娌欑闅旂涓庣幆澧冩棤鍏虫€э紱
+      - 鏇存柊 `unblockInstall()`锛氫负鍏ㄩ儴鏀寔鑷姩瀹夎鐨勫涓昏В闄ゅ畨瑁呴攣闄愬埗銆?
+    - **涓昏繘绋?IPC 寮€鏀?(`app/src/main/index.ts`)**锛?
+      - 绉婚櫎 `onboarding-install-host` 涓?`onboarding-unblock-install` 涓‖缂栫爜鐨?`codex / deepseek-harness` 鐧藉悕鍗曢檺鍒讹紝鍚戣缃獥鍙ｅ紑鏀惧叏瀹夸富鑷姩瀹夎 IPC 璋冪敤銆?
+    - **鍗曟祴涓庡叏閲忓洖褰掗獙璇?*锛?
+      - `app/tests/host-onboarding.test.cjs`: 鏂板 5 椤逛笓鐢ㄨ嚜鍔ㄥ寲娴嬭瘯锛圓ntigravity 鎷疯礉閮ㄧ讲銆丵oder 鎵╁睍缂撳瓨鍐欏叆銆丱penCode 鎻掍欢鑴氭湰澶嶅埗銆丆laude Code 甯傚満娣诲姞涓庡畨瑁呮寚浠ゆ墽琛屻€佸叏瀹夸富 unblock 鏍￠獙锛夛紱
+      - 鏍稿績搴旂敤鍗曟祴: 1243 椤瑰叏閮ㄩ€氳繃锛?237 pass, 0 fail, 6 skipped锛夛紱
+      - 鎻掍欢鍗曟祴: 124 椤瑰叏閮ㄩ€氳繃锛?24 pass, 0 fail锛夛紱
+      - 闈欐€佺被鍨嬫鏌? `npm run typecheck`锛圢ode & Web 鍙岄€氳繃锛? 閿欒锛夈€?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `c9e2f86`锛坄main` 鍒嗘敮鍘熷瓙鍖栨彁浜わ級
+- **鍘熷瓙鎻愪氦璁板綍**:
+  - `c9e2f86 feat(onboarding): [FEAT-HOST-AUTO-INSTALL-ALL: 琛ュ叏鍏ㄥ涓伙紙Antigravity, Qoder, Claude, OpenCode锛変竴閿嚜鍔ㄥ畨瑁匽`
+  - `6eac67c feat(runtime): [FEAT-HOST-HOT-REBIND: 瀹夸富鍒囨崲鏀寔鏃犵紳鐑噸缁戯紝鏃犻渶閲嶅惎妗屽疇]`
+- **杩愯鐜**: Node.js v24.14.0, Electron 34.5.8, Windows 11
+- **涓诲伐绋嬩粨搴?*: `D:/Frankenstein/Uta`
+- **鑷姩鍖栨祴璇曠姸鎬?*:
+  - 鏍稿績搴旂敤鍗曟祴: 1243 椤瑰叏閮ㄩ€氳繃锛?237 pass, 0 fail, 6 skipped锛?
+  - 鎻掍欢鍗曟祴: 124 椤瑰叏閮ㄩ€氳繃锛?24 pass, 0 fail锛?
+  - 闈欐€佺被鍨嬫鏌? `npm run typecheck`锛圢ode & Web 鍙岄€氳繃锛? 閿欒锛?
+- **鎵撳寘绾︽潫**: 閬电収鐢ㄦ埛鎸囩ず鏃犻渶杩愯 `npm run dist:zip`銆?
+
+---
+
+# Uta 瀹夸富鏃犵紳鐑噸缁戜笌鍙栨秷鎸傝捣瀹℃壒浜ゆ帴锛?026-11-02锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FEAT-HOST-HOT-REBIND: 瀹夸富鍒囨崲鏀寔鏃犵紳鐑噸缁戯紝鏃犻渶閲嶅惎妗屽疇]**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 姝ゅ墠鐢ㄦ埛鍦ㄥ揩閫熻缃垨璁剧疆闈㈡澘鍒囨崲瀹夸富锛堝浠?Codex 鍒囨崲鍒?Qoder/Antigravity锛夋椂锛屾覆鏌撳眰纭紪鐮佷簡 `window.location.reload()` 涓?`api.reloadWindow()`锛屽鑷存暣涓?Electron 绐楀彛寮哄埗鍒锋柊銆丩ive2D 妯″瀷閲嶈浇涓庣煭鏆傞粦灞忥紱
+    - 鏍规湰鍘熷洜鍦ㄤ簬 `preload/index.ts` 涓殑 `window.utaAPI.petBinding` 浠呭湪鍚姩鏃跺悓姝ヨ鍙栦竴娆★紝鏈殢缁戝畾鍙樺寲瀹炴椂鏇存柊锛涗笖 `active.ts` 鏈洃鍚?`onPetBindingChanged` 浜嬩欢锛屽鑷存棤娉曞姩鎬佺儹鍒囨崲瀹夸富閫傞厤鍣ㄣ€?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - **棰勫姞杞藉眰鍔ㄦ€佺粦瀹氭槧灏?(`app/src/preload/index.ts`)**锛?
+      - `petBinding` 鏀逛负鍙楁帶鐘舵€佸璞★紝鍐呴儴閫氳繃 `ipcRenderer.on('pet-binding-changed')` 鐩戝惉涓昏繘绋嬪箍鎾紝瀹炴椂鍚屾鏈€鏂扮殑 `binding` 鐘舵€併€?
+    - **娲诲姩閫傞厤鍣ㄧ儹閲嶇粦 (`app/src/renderer/services/adapters/active.ts`)**锛?
+      - 澧炲姞 `dynamicBoundHost` 涓?`setBoundHostPreference` 鎺ュ彛锛?
+      - 鑷姩鐩戝惉 `onPetBindingChanged` 浜嬩欢锛屽綋瀹夸富 ID 鍙樻洿鏃惰嚜鍔ㄨ皟鐢?`switchActiveHost` 鏃犵紳鏇挎崲娲诲姩閫傞厤鍣紝閲婃斁鏃ч€傞厤鍣ㄨ繛鎺ュ苟鍚姩鏂板涓伙紱
+      - 瀵煎嚭 `toHostId` 渚涚粍浠剁儹鍒囦娇鐢ㄣ€?
+    - **涓昏繘绋嬪鎵瑰畨鍏ㄧ啍鏂?(`app/src/main/runtime-bridge.ts`, `app/src/main/index.ts`)**锛?
+      - 鍦?`RuntimeBridge` 涓柊澧?`cancelPendingApprovals(hostId?: string)` 鎺ュ彛锛?
+      - 鍦ㄥ涓诲垏鎹㈡垨瑙ｉ櫎缁戝畾鏃讹紝鑷姩鍙栨秷鏃у涓讳粛鎸傝捣鐨勫湪閫?`/approval/ask` 瀹℃壒璇锋眰锛堣繑鍥?`cancelled`锛夛紝閬垮厤鏃у涓婚暱鏃堕棿鎸傝捣瓒呮椂锛?
+      - 鍦?`/approval/ask` 鍐呴儴寮曞叆 `Promise.race` 涓?`ctrl.signal` 鐩戝惉锛屼繚璇佽姹傚湪瀹㈡埛绔柇寮€鎴栧彇娑堟椂鑳藉鍗虫椂鍝嶅簲锛?
+      - `validateApprovalRequest` 鍚屾鍏煎 `host` 涓?`hostId` 浼犲弬銆?
+    - **娓叉煋灞傝В闄ゅ己鍒跺埛鏂颁笌鐘舵€佸悓姝?(`DeskpetStage.vue`, `QuickSettingsPanel.vue`, `ConnectionsDomain.vue`, `deskpet.ts`)**锛?
+      - `DeskpetStage.vue`: 褰诲簳绉婚櫎 `switchPreference` 鍐呯殑 `window.location.reload()`锛屾敼涓鸿皟鐢?`switchActiveHost` 鐑垏锛?
+      - 骞跺湪 `onHostChanged` 鍥炶皟涓竻闄ゆ畫鐣欏鎵瑰崱鐗囷紙`store.clearApprovalRequests`锛夛紝鍚戞柊瀹夸富鎺ㄩ€佸綋鍓嶆ā鍨嬫帶浠朵笌琛ㄦ儏锛?
+      - `QuickSettingsPanel.vue`: 绉婚櫎 `reloadWindow` 鍊掕鏃朵笌鈥滈噸鏂板姞杞解€濇彁绀猴紝鏀逛负鈥滃垏鎹㈠涓烩€濅笌鍗虫椂鐑噸缁戝弽棣堬紱
+      - `ConnectionsDomain.vue`: 鍘婚櫎鈥滄瀹犳鍦ㄩ噸鏂板姞杞解€濇枃妗堛€?
+    - **鍗曟祴涓庡叏閲忓洖褰掗獙璇?*锛?
+      - `app/tests/runtime-bridge.test.cjs`: 鏂板 `cancelPendingApprovals` 鍦ㄩ€斿鎵瑰彇娑堜笌鍗虫椂 `cancelled` 杩斿洖娴嬭瘯锛?
+      - `app/tests/quick-settings-panel.test.cjs`: 鏇存柊娴嬭瘯濂戠害鏂█锛岄獙璇佹棤閲嶈浇鐑垏锛?
+      - `app/tests/ui-style-alignment.test.cjs`: 鍖归厤 `switchActiveHost` 鐑噸缁戣皟鐢紱
+      - 鍏ㄩ噺娴嬭瘯 1238 椤瑰叏閮ㄩ€氳繃锛?232 pass, 0 fail, 6 skipped锛夛紝鎻掍欢娴嬭瘯 124 椤瑰叏閮ㄩ€氳繃锛岀被鍨嬫鏌?0 閿欒銆?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `6eac67c`锛坄main` 鍒嗘敮鍘熷瓙鍖栨彁浜わ級
+- **鍘熷瓙鎻愪氦璁板綍**:
+  - `6eac67c feat(runtime): [FEAT-HOST-HOT-REBIND: 瀹夸富鍒囨崲鏀寔鏃犵紳鐑噸缁戯紝鏃犻渶閲嶅惎妗屽疇]`
+- **杩愯鐜**: Node.js v24.14.0, Electron 34.5.8, Windows 11
+- **涓诲伐绋嬩粨搴?*: `D:/Frankenstein/Uta`
+- **鑷姩鍖栨祴璇曠姸鎬?*:
+  - 鏍稿績搴旂敤鍗曟祴: 1238 椤瑰叏閮ㄩ€氳繃锛?232 pass, 0 fail, 6 skipped锛?
+  - 鎻掍欢鍗曟祴: 124 椤瑰叏閮ㄩ€氳繃锛?24 pass, 0 fail锛?
+  - 闈欐€佺被鍨嬫鏌? `npm run typecheck`锛圢ode & Web 鍙岄€氳繃锛? 閿欒锛?
+- **鎵撳寘绾︽潫**: 閬电収鐢ㄦ埛鎸囩ず鏃犻渶杩愯 `npm run dist:zip`銆?
+
+---
+
+# Uta deskpet_play_animation 涓枃鍔ㄤ綔鍚嶄笌妯″瀷鑳藉姏娓呭崟瀵归綈浜ゆ帴锛?026-11-02锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FIX-ANIMATION-NAME-VALIDATION: 鏀惧 deskpet_play_animation 涓枃鍔ㄤ綔鍚嶆牎楠屼笌鑳藉姏娓呭崟瀵归綈]**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 涓昏繘绋?`runtime-commands.ts` 瀵?`play_animation` 鐨?`name` 閲囩敤 `sanitizeToken`锛堜弗鏍奸檺鍒?`/^[A-Za-z0-9_-]{1,32}$/`锛夛紝鐩存帴浠?HTTP 400 鎷︽埅浠讳綍鍚湁涓枃瀛楃鐨勫姩浣滃悕锛?
+    - 鐒惰€屾瀹犵 `useStageModelLifecycle.ts` 鏆撮湶缁欏涓荤殑鑳藉姏娓呭崟涓紝鍚戝涓绘帹鑽愮殑鍔ㄤ綔鍚嶅寘鎷ぇ鑲ラ奔銆丏S 绛夋ā鍨嬬殑涓枃鍘熺敓鍔ㄤ綔锛堝銆岃劚鎹曘€嶃€併€岀嫍灏惧反鑽夋墦寮€銆嶃€併€岀嫍灏惧反鑽夊叧闂€嶃€併€屾姎鑳搞€嶃€併€岀珫椋熸寚銆嶇瓑锛夛紱
+    - 閫犳垚瀹夸富閫氳繃 `set_preset` 鍙互鎾斁瀵瑰簲鍔ㄤ綔锛屼絾璧板畼鏂?MCP 宸ュ叿 `deskpet_play_animation` 鍗存亽琚富杩涚▼鏍￠獙鎷掔粷鎶?400锛?
+    - 鍗充娇缁曡繃涓昏繘绋嬫牎楠岋紝娓叉煋杩涚▼ `useStageRenderLoop.ts` 鍘熷厛鍙鏌?`store.emotionAdapter.animations`锛屾湭浼犲叆 `store.modelCapabilities`锛屽鑷存湭鑳藉懡涓師鐢熸ā鍨嬪姩浣滅粍锛坄caps.motionGroups`锛夛紝鐩存帴涓㈠純鍔ㄤ綔銆?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - **涓昏繘绋嬫寚浠ゆ竻娲楁斁瀹?(`app/src/main/runtime-commands.ts`)**锛?
+      - 鏂板 `ANIMATION_NAME_PATTERN = /^[\u4e00-\u9fa5\u3040-\u30ffA-Za-z0-9_路\-@#\s.]{1,48}$/` 涓?`MAX_ANIMATION_NAME_CHARS = 48`锛?
+      - 鏂板 `sanitizeAnimationName` 鍑芥暟锛屾浛浠ｅ師鏈夌殑涓ユ牸 ASCII `sanitizeToken`锛?
+      - 鍏佽涓棩鏂囧瓧绗︺€佸父瑙佽繛瀛楃銆佷笅鍒掔嚎銆丂绗﹀彿锛堝 `Tap@Body`锛夈€?搴忓彿锛堝 `鑴辨崟#0`锛変笌鐐瑰彿銆?
+    - **杩愯鏃舵ˉ鎺ヨ兘鍔涙牎楠?(`app/src/main/runtime-bridge.ts`)**锛?
+      - 浼樺寲 `command.command === 'play_animation'` 鐨勮兘鍔涘尮閰嶉€昏緫锛?
+      - 鏀寔绮剧‘鍚嶇О鍖归厤銆佹敮鎸?`#绱㈠紩` 鍓嶇紑鍔ㄤ綔缁勫尮閰嶃€佹敮鎸佷笉鍖哄垎澶у皬鍐欏洖閫€鍖归厤锛屾潨缁?422 璇姤銆?
+    - **娓叉煋灞傚姩浣滆В鏋愬寮?(`app/src/renderer/services/live2d/emotion-adapter.ts`)**锛?
+      - 灏?`getAnimationTarget(adapter, animation, caps)` 鎷撳睍涓烘敮鎸佷紶鍏?`caps: ModelCapabilities`锛?
+      - 褰?`adapter.animations` 涓湭鏄惧紡鏄犲皠鏃讹紝鑷姩鍥為€€鍒?`caps.motionGroups`锛岀洿杩炲師鐢熷姩浣滅粍锛堝 `鑴辨崟 -> { motion: { group: '鑴辨崟', index: 0 } }`锛夛紱
+      - 瀹屾暣鏀寔 `鍔ㄤ綔缁?绱㈠紩` 璇硶锛堝寘鎷ぇ灏忓啓瀹归敊锛夛紝鏀寔閫氳繃绱㈠紩鐩磋揪澶氬彉浣撳姩浣滐紱
+      - 瑕嗙洊涓嶅尯鍒嗗ぇ灏忓啓鐨勫鐢ㄥ尮閰嶃€?
+    - **娓叉煋涓诲惊鐜笌璋冭瘯鍏ュ彛鎺ュ叆 (`useStageRenderLoop.ts`, `useStageModelLifecycle.ts`)**锛?
+      - 鍦?`useStageRenderLoop.ts` 娑堣垂 `pendingAnimation` 鏃讹紝灏?`store.modelCapabilities` 浼犲叆 `getAnimationTarget`锛?
+      - 鍦?`useStageModelLifecycle.ts` 鐨?`deskpetTestAnimation` 璋冭瘯鍑芥暟涓悓姝ヤ紶鍏?`store.modelCapabilities`銆?
+    - **瀹夸富 MCP 宸ュ叿濂戠害鏇存柊 (`plugin/plugins/deskpet-mcp/server.mjs`)**锛?
+      - 鏇存柊 `deskpet_play_animation` 鐨?Tool 鎻忚堪涓?Schema 璇存槑锛屾槑纭寚寮曞涓?LLM 鍙互鐩存帴浼犲叆鏉ヨ嚜 `deskpet_get_capabilities` 鐨勪腑鏂囧姩浣滃悕锛堝 `鑴辨崟`銆乣鐙楀熬宸磋崏鎵撳紑`锛夛紱
+      - 鎵ц `npm run plugin:build` 閲嶆柊鎵撳寘鎵€鏈夊垎鍙戞彃浠跺寘銆?
+    - **鍗曟祴涓庡叏閲忓洖褰掗獙璇?*锛?
+      - `app/tests/runtime-commands.test.cjs`: 琛ュ厖涓枃鍘熺敓鍔ㄤ綔锛坄鑴辨崟`銆乣鐙楀熬宸磋崏鎵撳紑`銆乣鐙楀熬宸磋崏鍏抽棴`銆乣鎶氳兏`銆乣绔栭鎸嘸銆乣Tap@Body`銆乣鑴辨崟#0`锛夌殑鐧藉悕鍗曚笌杈圭晫鏍￠獙娴嬭瘯锛?
+      - `app/tests/control-activation.test.cjs`: 琛ュ厖 `getAnimationTarget` 鍘熺敓涓枃鍔ㄤ綔缁勮В鏋愩€?绱㈠紩璇硶瑙ｆ瀽銆佷笉鍖哄垎澶у皬鍐欏尮閰嶇殑鍗曞厓娴嬭瘯锛?
+      - `app/tests/runtime-bridge.test.cjs`: 琛ュ厖杩愯鏃舵ˉ鎺ョ鐐瑰涓枃鍔ㄤ綔鍛戒护鐨勫悎娉曟姇閫掋€?22 鎷掔粷涓庡綊涓€鍖栨祴璇曪紱
+      - `plugin/tests/mcp-server.test.cjs`: 琛ュ厖 MCP 宸ュ叿瀵逛腑鏂囧姩浣滃悕鐨勭洿璋冩祴璇曪紱
+      - 鍏ㄥ鍗曟祴 1237 椤瑰叏閮ㄩ€氳繃锛?231 pass, 0 fail, 6 skipped锛夛紝鎻掍欢娴嬭瘯 124 椤瑰叏閮ㄩ€氳繃锛岀被鍨嬫鏌?0 閿欒銆?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `c8ded67`锛坄main` 鍒嗘敮鍘熷瓙鍖栨彁浜わ級
+- **鍘熷瓙鎻愪氦璁板綍**:
+  - `c8ded67 fix(runtime): [FIX-ANIMATION-NAME-VALIDATION: 鏀惧 deskpet_play_animation 涓枃鍔ㄤ綔鍚嶆牎楠屼笌鑳藉姏娓呭崟瀵归綈]`
+- **杩愯鐜**: Node.js v24.14.0, Electron 34.5.8, Windows 11
+- **涓诲伐绋嬩粨搴?*: `D:/Frankenstein/Uta`
+- **鑷姩鍖栨祴璇曠姸鎬?*:
+  - 鏍稿績搴旂敤鍗曟祴: 1237 椤瑰叏閮ㄩ€氳繃锛?231 pass, 0 fail, 6 skipped锛?
+  - 鎻掍欢鍗曟祴: 124 椤瑰叏閮ㄩ€氳繃锛?24 pass, 0 fail锛?
+  - 闈欐€佺被鍨嬫鏌? `npm run typecheck`锛圢ode & Web 鍙岄€氳繃锛? 閿欒锛?
+- **鎵撳寘绾︽潫**: 閬电収鐢ㄦ埛鎸囩ず鏃犻渶杩愯 `npm run dist:zip`銆?
+
+---
+
+# Uta 鍔ㄤ綔宸ュ潑瀵煎嚭鏍囧噯 Live2D motion3.json 鍔ㄤ綔鏂囦欢浜ゆ帴锛?026-11-01锛?
+
+## 1. 浜嬮」涓庡畬鎴愭竻鍗?
+- **[FEAT-WORKSHOP-MOTION3-EXPORT: 鍔ㄤ綔宸ュ潑鍒嗛暅搴忓垪瀵煎嚭鏍囧噯 Live2D motion3.json 鍔ㄤ綔鏂囦欢]**锛?
+  - **鑳屾櫙涓庡師鍥?*锛?
+    - 鐢ㄦ埛甯屾湜瀛︿範 Jingyu 椤圭洰鐨勬牳蹇冭兘鍔涳紝灏?Uta 鍔ㄤ綔宸ュ潑涓紪鎺掑ソ鐨勫垎闀滃姩浣滀竴閿鍑轰负鏍囧噯鐨?Live2D `motion3.json` 鍔ㄤ綔鏂囦欢锛屼娇瀵煎嚭鐨勫姩浣滃彲鐩存帴鏀惧叆 VTube Studio銆丆ubism Viewer 鎴栧悇绫?Live2D 瀹夸富涓綔涓哄師鐢熷姩浣滀娇鐢紱
+    - 閽堝姝ゅ墠鐨勮姹傦紝鏃ュ父寮€鍙戦獙璇佷笓娉ㄤ簬鍔熻兘涓庢祴璇曪紙璺宠繃鑰楁椂鐨?`npm run dist:zip` 鎵撳寘姝ラ锛夈€?
+  - **瀹炵幇涓庢暣鏀?*锛?
+    - **鏍囧噯鍔ㄤ綔瀵煎嚭鏈嶅姟 (`app/src/renderer/services/live2d/motion-exporter.ts`)**锛?
+      - 涓ユ牸渚濈収 Cubism 3/4/5 Motion 瑙勮寖鏋勫缓 `Version: 3`銆乣Meta`銆乣Curves` 涓?`Segments`锛?
+      - 閲囩敤纭畾鎬ч噰鏍锋彃鍊硷紙榛樿 30Hz锛屽彲閫?15..60Hz锛夛紝缂撳姩鏇茬嚎涓ユ牸浣跨敤涓?Uta 鑸炲彴杩愯鏃?100% 涓€鑷寸殑 `easeInOutCubic` 鍏紡锛?
+      - 閽堝姣忎釜鍒嗛暅姝ラ鐨?`durationMs`锛堣繃娓★級涓?`holdMs`锛堜繚鎸侊級锛岃嚜鍔ㄧ儤鐒欏钩婊戞洸绾匡紱
+      - 瀹屾暣鏀寔澶氶樁娈垫帶浠讹紙濡?`澶у皬鍙?涓璥銆乣澶у皬鍙?灏廯锛夌殑鍙傛暟瑙ｆ瀽涓庡钩婊戣繃娓★紱
+      - 瀹屾暣鏀寔閮ㄤ欢鏄鹃殣杩囨浮锛堣嚜鍔ㄧ敓鎴?`Target: "PartOpacity"` 鏇茬嚎锛夛紱
+      - 鑷姩杩囨护鐗╃悊杈撳嚭閫氶亾锛坄physicsOutputIds` 涓?`isPhysicsOutput`锛夛紝鏉滅粷鍔ㄤ綔瀵煎叆 VTube Studio 鍚庝笌鐗╃悊婕旂畻鎵撴灦锛?
+      - 鑷姩杩囨护鍏ㄧ▼鏃犱綅绉?鏈慨鏀圭殑闈欐€侀粯璁ゅ弬鏁帮紝淇濇寔鐢熸垚鐨?`*.motion3.json` 鍔ㄤ綔鏂囦欢鏋佽嚧杞婚噺骞插噣锛?
+      - 鏀寔涓夌鏀跺熬妯″紡锛坄hold` 缁堟€佷繚鎸併€乣revert` 缁堟€佷繚鎸佸悗骞虫粦娣″洖寰呮満銆乣loop` 寰幆鍔ㄤ綔鏍囪锛夈€?
+    - **涓昏繘绋嬩笌棰勫姞杞芥枃浠朵繚瀛橀€氶亾 (`app/src/main/index.ts`, `app/src/preload/index.ts`, `app/src/renderer/env.d.ts`)**锛?
+      - 娉ㄥ唽 `settings-motion-export-file` IPC 閫氶亾锛屾彁渚涘甫鏈?`*.motion3.json` 涓撶敤鏂囦欢杩囨护鍣ㄧ殑绯荤粺鍘熺敓淇濆瓨瀵硅瘽妗嗭紱
+      - 鑷姩娓呮礂闈炴硶瀛楃锛岃鑼冨寲鏂囦欢鍚嶅懡鍚嶏紙`dafish-bow.motion3.json`锛夛紱
+      - 鍦?Web/娴嬭瘯鐜涓唴缃?Blob 鑷姩涓嬭浇鍏滃簳銆?
+    - **宸ュ潑鐣岄潰涓庣敤鎴蜂氦浜?(`SettingsStudioTab.vue`, `SettingsPanel.vue`, `settings-workshop.ts`)**锛?
+      - 鍦ㄥ姩浣滃伐鍧婃搷浣滄爮锛坄studio-action-row`锛変腑杩藉姞銆屸 瀵煎嚭 motion3.json銆嶆寜閽紝閲囩敤 Blue Biophilic 璁捐绯荤粺鏍峰紡锛?
+      - 瀵煎嚭鎴愬姛鍚庤嚜鍔ㄥ湪宸ュ潑椤堕儴灞曠ず杞婚噺鍙嶉鎻愮ず锛坄宸叉垚鍔熷鍑烘爣鍑?Live2D 鍔ㄤ綔鏂囦欢锛歺xx.motion3.json`锛夈€?
+    - **鍗曟祴涓庡叏閲忔祴璇曡鐩?(`app/tests/motion-exporter.test.cjs`, `app/package.json`)**锛?
+      - 缂栧啓 6 涓牳蹇冩祴璇曠敤渚嬶細鏂囦欢鍚嶈鑼冨寲銆乪aseInOutCubic 杈圭晫閽冲埗銆佸崟姝?revert 瀹屾暣鏃跺簭銆佺墿鐞嗕笌闈欐€佸弬鏁拌繃婊ゃ€佸ぇ灏忓彉澶氭鐑樼剻銆侀儴浠舵樉闅?PartOpacity 涓庡惊鐜爣璁帮紱
+      - 鎺ュ叆 `app/package.json` 鐨?`npm test` 鑴氭湰锛屾祴璇曞叏閮ㄩ€氳繃銆?
+
+## 2. 鐜板満鐘舵€?
+- **Git HEAD**: `dfae12e`锛坄main` 鍒嗘敮鍘熷瓙鍖栨彁浜わ級
+- **鍘熷瓙鎻愪氦璁板綍**:
+  - `dfae12e feat(workshop): [FEAT-WORKSHOP-MOTION3-EXPORT: 鍔ㄤ綔宸ュ潑鍒嗛暅搴忓垪瀵煎嚭鏍囧噯 Live2D motion3.json 鍔ㄤ綔鏂囦欢]`
+- **杩愯鐜**: Node.js v24.14.0, Electron 34.5.8, Windows 11
+- **涓诲伐绋嬩粨搴?*: `D:/Frankenstein/Uta`
+- **鑷姩鍖栨祴璇曠姸鎬?*:
+  - 鏍稿績搴旂敤鍗曟祴: 1235 椤瑰叏閮ㄩ€氳繃锛?229 pass, 0 fail, 6 skipped锛?
+  - 鎻掍欢鍗曟祴: 124 椤瑰叏閮ㄩ€氳繃锛?24 pass, 0 fail锛?
+  - 闈欐€佺被鍨嬫鏌? `npm run typecheck`锛圢ode & Web 鍙岄€氳繃锛? 閿欒锛?
+  - 鐢熶骇鏋勫缓: `npm run build` 鎴愬姛锛?.57s锛?
+
+---
+
+# Uta 褰撳墠寮€鍙戜氦鎺?
+
+鏇存柊锛?026-11-01銆傝鑰咃細鎺ユ墜鏈」鐩殑寮€鍙戜細璇濄€傜敤鎴疯繘搴﹀叆鍙ｆ槸 [CURRENT](CURRENT.md)锛屼骇鍝侀『搴忔槸 [1.0.0 鏂规](../ROADMAP-TO-1.0.0.md)銆傛湰鏂囦欢闅忓疄闄呰繘灞曟洿鏂帮紝涓嶅彟寤哄钩琛屾€诲彴璐︺€?
+
+
+## 2026-11-01 娣卞害瀵归綈 VTS 鍙傛暟鏍囧噯涓庣墿鐞?骞界伒鍙傛暟褰诲簳鍑€鍖?
+
+- 鍩虹嚎 main@08bf140锛屾彁浜?fb56699銆?
+- **[OPT-VTS-STANDARD-SLIDERS: 娣卞害瀵归綈 VTS 鍙傛暟鏍囧噯涓庣墿鐞嗚緭鍑?骞界伒鍙傛暟褰诲簳鍑€鍖朷**锛?
+  - 璧勪骇灞傝В鏋愶細鍦?main/index.ts 鏀堕泦 *.vtube.json 涓殑 ParameterSettings 鍒?vtubeParameters锛屽苟鍦?env.d.ts 涓?loader.ts 涓悓姝ョ被鍨嬶紱
+  - 鎶戝埗瀹樻柟姝诲弬鏁帮細褰撴ā鍨嬫湁 AngleX/Y/Z 鎴?PositionX/Y/Z 鏃讹紝鑷姩鎶戝埗瀹樻柟鏈繛鎺ョ殑 ParamAngleX/Y/Z 涓?ParamBodyAngleX/Y/Z锛屾秷闄ゅ弻閲嶆粦鍧椾笌鍋囨粦鍧楋紱
+  - 璇嗗埆 VTS 鏍稿績浜斿畼锛氬湪 emotion-adapter.ts 寤虹珛 VTS_KNOWN_META锛屾妸 EyeSmile锛堢瑧鐪硷級銆丆heeckPuff锛堥紦鑴革級銆乀ongueOut锛堝悙鑸岋級銆丣awOpen锛堜笅宸村紶寮€锛夈€丮outhpucker锛堝槦鍢达級銆丮outhFunnel锛堝渾鍢达級銆丯oseNeer锛堢毐榧绘锛夌瓑 30+ 椤?VTS 鍙傛暟鏄犲皠涓虹涓€姊槦鐨勬牳蹇冩粦鍧楋紱
+  - 鐗╃悊涓庨€氶亾褰诲簳杩囨护锛氬弻閲嶅畧鍗交搴曞墧闄?292 涓墿鐞嗚緭鍑哄弬鏁帮紝姝ｅ垯鍓旈櫎鍐呴儴绮掑瓙鑺辩摚銆侀棯鐑佺壒鏁堛€佹睏姘村眰鍙婅闊抽€氶亾锛?
+  - 澶ц偉楸煎伐鍧婃粦鍧楃敱 426 涓ぇ骞呮敹鏁涚簿绠€鑷?44 涓湡瀹炪€佸彲璋冦€佸嵆鏃剁敓鏁堢殑娓呮櫚婊戝潡銆?
+- **楠岃瘉涓庝骇鐗?*锛?
+  - 搴旂敤鍗曟祴 1229 椤瑰叏閮ㄩ€氳繃锛?223 pass, 0 fail, 6 skipped锛夛紝鎻掍欢鍗曟祴 124 椤瑰叏閮ㄩ€氳繃锛孨ode/Web 绫诲瀷妫€鏌?0 閿欒銆?
+  - 鍙戝竷鍘嬬缉鍖呭埛鏂帮細app/release/Uta-0.2.0-win-x64.zip锛圫HA256: 2d5be2c0d14b109a24bad54543429075154f5419de3afffcf5f10620047eaf84锛夈€?
+- **鐜板満涓庣姸鎬?*锛欸it HEAD fb56699锛屽伐浣滃尯骞插噣銆?
+
+
+
+## 2026-11-01 澶ц偉楸煎闃舵鎺т欢锛堝ぇ/涓?灏忥級銆佸弽鍚戝紑鍏炽€佹墜鍔垮Э鎬佷笌VTS鏍稿績濮挎€佹粦鍧楀叏闈㈤€傞厤
+
+- 鍩虹嚎 main@b4d62df锛屾彁浜?06bd6ce銆?
+- **[FEAT-MULTI-STAGE-CONTROLS: 澶у皬鍙樹笁闃舵锛堝ぇ/涓?灏忥級涓庡闃舵鎺т欢寮曟搸鏀寔]**锛?
+  - 鏁版嵁妯″瀷锛歁odelControlTarget 涓?ResolvedModelControl 澧炲姞 stages銆乧urrentStageIndex銆乨efaultStageIndex銆?
+  - 鎺у埗寮曟搸锛歡etActiveControlParams 鎻愬彇婵€娲婚樁娈靛弬鏁帮紱applyControlActionToList 鏀寔寰幆閫掕繘鍒囨崲锛堝ぇ -> 涓?-> 灏?-> 澶э級锛屾敮鎸佸啋鍙风洿杈捐娉曪紙澶у皬鍙?涓€佸ぇ灏忓彉:灏忥級锛岃繑鍥為粯璁ら樁娈垫椂鑷姩鏍囪 active = false锛況eset 鎭㈠榛樿闃舵锛?
+  - 閿侀拤閫昏緫锛歵oggleHeldControl 鏀寔闃舵寰幆骞跺湪闈為粯璁ら樁娈电淮鎸?held = true锛屽洖鍒伴粯璁ら樁娈佃嚜鍔?unpin锛?
+  - 鐣岄潰鍛堢幇锛歈uickSettingsPanel 涓?SettingsStudioTab 鎺т欢鑳跺泭澧炲姞闃舵寰爣锛圼澶銆乕涓璢銆乕灏廬锛夛紝浣跨敤 Blue Biophilic 閰嶈壊銆傚伐鍧婃楠ょ紪杈戞敮鎸佽褰曞苟鎸佷箙鍖栧寘鍚樁娈电殑鍔ㄤ綔椤广€?
+- **[FIX-DAFISH-TOGGLE: 淇澶ц偉楸煎弽鍚戝紑鍏充笌鎵嬪娍鑲綋鍙傛暟琛ラ綈]**锛?
+  - 闀跨煭瑁欏垏鎹細鏀圭敤涓ら樁娈电姸鎬侊紝闃舵 0 涓洪暱瑁欙紙Clothes1: 1锛夛紝闃舵 1 涓虹煭瑁欙紙Clothes1: 0锛夛紱
+  - 灏惧反寮€鍏筹細鏀圭敤涓ら樁娈电姸鎬侊紝闃舵 0 涓哄紑锛圕lothes5: 1锛夛紝闃舵 1 涓哄叧锛圕lothes5: 0锛夛紱
+  - 鑲綋鎵嬪娍锛氫负鈥滄姎鑳糕€濄€佲€滅嫍灏捐崏鈥濄€佲€滅珫椋熸寚鈥濊ˉ鍏ㄤ綔鑰呭師鐢熷姩浣滀腑鐨勮偄浣撲笌鍏宠妭鍙傛暟锛圥aram56銆丳aram59~62銆丳aram36/39/41~43 绛夛級锛屾仮澶嶇湡瀹炴墜閮ㄥЭ鎬併€?
+  - 鍚屾鏇存柊涓変釜閰嶇疆婧愶細鍐呯疆閫傞厤琛ㄣ€佹枃妗ｉ€傞厤琛ㄤ互鍙婄敤鎴锋棩鐢ㄦā鍨嬮厤缃€?
+- **[OPT-SLIDERS-VTS: 閫傞厤 VTS 妯″瀷澶撮儴涓庤韩浣撴牳蹇冨Э鎬佹粦鍧楀強鍒嗛殧绗﹁繃婊**锛?
+  - resolveModelSliders 鎺ュ叆 focus 鏄犲皠锛岃嚜鍔ㄥ皢 VTS 妯″瀷鐨?AngleX/Y/Z 涓?PositionX/Y/Z 瑙ｆ瀽涓虹涓€姊槦鐨勬牳蹇冨Э鎬佹粦鍧楋紱
+  - 鏂板姝ｅ垯杩囨护锛屽交搴曞墧闄?VTS 绾崰浣嶅垎闅旂锛圖ivider*銆佲枲鈻犫枲锛変笌鏃犵敤鍐呴儴瑙﹀彂閿紙Anikey*銆丼WITCH*锛夈€?
+- **楠岃瘉涓庝骇鐗?*锛?
+  - 搴旂敤鍗曟祴 1228 椤瑰叏閮ㄩ€氳繃锛?222 pass, 0 fail, 6 skipped锛夛紝鎻掍欢鍗曟祴 124 椤瑰叏閮ㄩ€氳繃锛孨ode/Web 绫诲瀷妫€鏌?0 閿欒銆?
+  - 鐢熶骇鏋勫缓涓庡彂甯冩墦鍖呴『鍒╁畬鎴愶細app/release/Uta-0.2.0-win-x64.zip锛圫HA256: 0626f7e51218706f81539be139eb41c3bb29c18c13129d64574674e3bba0a259锛夈€?
+- **鐜板満涓庣姸鎬?*锛欸it HEAD 06bd6ce锛屽伐浣滃尯骞插噣锛屾棩鐢?profile 瀹屾暣銆?
+
+
+## 2026-11-01 Codex 鑱婂ぉ鑷姩鎭㈠涓庢棩甯歌繛鎺ヤ綋楠?
+
+- 鍩虹嚎 main@b4d62df锛岀敤鎴峰凡纭鑷姩鎭㈠銆侀粯璁よ窡闅忎富鍔ㄥ彂瑷€鐨勮亰澶┿€佸浐瀹氳亰澶╁彲閫夌殑鏂规銆?
+- 鏂板瀹炰緥鍐?codex-conversations.json锛屼粎淇濆瓨鑱婂ぉ ID銆佹爣绛俱€佸伐浣滅洰褰曘€佹椿鍔ㄦ椂闂淬€佸彲鐢ㄧ姸鎬佸拰鑷姩鐩爣锛屾渶澶?64 椤癸紱鍥哄畾鐩爣鍙婂綋鍓嶈嚜鍔ㄧ洰鏍囧彈淇濈暀銆傛棫 profile 鍐呯殑 hook 浼氳瘽璁板綍鍙縼鍏ャ€傝亰澶╁巻鍙叉鏂囥€佷护鐗屽拰宸ュ叿鍙傛暟涓嶈繘鍏ヨ缂撳瓨銆?
+- RuntimeBridge 鍦ㄩ壌鏉冦€佸涓昏繃婊ゃ€佸幓閲嶄箣鍚庤褰曚細璇濇椿鍔紱Codex 鐨勮亰澶╁垪琛ㄣ€佸彂閫佸氨缁笌瀹為檯鍙戦€佸叡鐢ㄦ寔涔呭寲鐩爣銆傚悗鍙板伐鍏风粨鏋?瀹屾垚/鏂颁細璇濇彙鎵嬪彧鏇存柊娲诲姩锛沀serPromptSubmit 鐨?userInitiated 鏍囪鎵嶅垏鎹㈠凡鏈夎嚜鍔ㄧ洰鏍囥€傚吋瀹瑰凡瀹夎鏃?hook 鐨勪笓鐢ㄢ€滄€濊€冧腑...鈥濇爣绛撅紝澶勭悊缁撴灉/澶勭悊澶辫触鐨?thinking 鐘舵€佷笉鑳芥姠鐩爣銆?
+- Codex 鐨勫凡鐭ヨ亰澶╀繚鐣欏埌閲嶅惎鍚庯紝30 鍒嗛挓鏃犳椿鍔ㄤ笉鍐嶆嫆缁?queue锛涘疄闄呯嚎绋嬪け鏁堢敱鍘熸湁 CLI 鍥炴墽纭锛屽苟鏍囪鐩爣涓嶅彲鐢ㄣ€傚浐瀹氱洰鏍囩己澶辨椂淇濇寔閫夋嫨锛屽彂閫佸け璐ヤ繚鐣欒崏绋匡紱鍏朵粬瀹夸富鐨勮繃鏈熴€佹潈闄愬拰蹇欑鏍￠獙缁存寔鍘熻涔夈€傛櫘閫?CLI/鍙傛暟閿欒涓嶈鍒や负鑱婂ぉ琚垹闄わ紝鏈煡鎶曢€掔粨鏋滀繚鐣?unknown 璇箟銆?
+- 杩炴帴椤垫瘡 2 绉掑悗鍙版洿鏂拌亰澶╁垪琛紝鍥哄畾鑱婂ぉ鏀惰繘鍙€夊睍寮€椤癸紝鏈満绔偣鏀惰繘璇婃柇銆侰odex 闀挎椂闂存棤娲诲姩鏄剧ず寰呭懡锛岀Щ闄よ姹傜櫥璁板悗鎵嬪姩鍒锋柊鐨勬棩甯告彁绀恒€?
+- 楠岃瘉锛氬簲鐢?1225 椤癸紙1219 閫氳繃銆? 璺宠繃锛夛紝鎻掍欢 124/124锛孨ode/Web 绫诲瀷銆佸簲鐢ㄦ瀯寤哄拰鎻掍欢鏋勫缓閫氳繃銆傜湡瀹為殧绂?Electron 涓夎疆楠岃瘉浜嗗悗鍙颁笉鎶㈢洰鏍囥€佷富鍔ㄥ彂瑷€鍒囨崲銆佺獥鍙ｈ嚜鍔ㄦ洿鏂般€侀噸鍚仮澶嶄竴澶╁墠鐨勫浐瀹氳亰澶┿€佸け鏁堝浐瀹氳亰澶╀繚鎸侀€変腑涓旂姝㈠彂閫併€傚彂閫侀槦鍒椾娇鐢ㄥ彈鎺?CLI 鏇胯韩楠岃瘉绮剧‘绾跨▼锛涚湡瀹炶处鍙峰彂閫佷粛寰呯敤鎴蜂娇鐢ㄩ獙鏀躲€?
+- 鐜板満寮€鍙?profile dev-f7e444bba875 鐨?PID 18932 涓烘洿鏂板墠鐨勪富杩涚▼锛屽畬鏁撮噸鍚?Uta 鍚庡姞杞芥柊閫昏緫銆俛pp/out 鍙?plugin/dist 宸叉洿鏂帮紱鏈疆浜や粯涓烘簮鐮佷笌寮€鍙戝惎鍔ㄦ瀯寤恒€傛棩甯?ZIP 淇濇寔涓婁竴鎵瑰€欓€夊寘鏉ユ簮锛屽悗缁墦鍖呴渶鍩轰簬鏈鎻愪氦銆?
+- 缁撴灉涓?UI 鎴浘淇濈暀鍦ㄦ湰鏈轰复鏃剁洰褰曠殑 uta-conversation-ui-*锛涙祴璇曞疄渚嬪凡缁忛€€鍑恒€傚悗缁厛纭閲嶅惎鍚庣殑鑷姩鍥炲鐩爣鍙婂浐瀹氳亰澶╋紝鐒跺悗鍐嶉獙鏀剁湡瀹?Codex queue 鐨勫洖鎵т笌鍥炲褰掑睘銆?
+
+
+## 2026-11-01 鍔ㄤ綔宸ュ潑涓庡涓诲婕斿鏌ョ己闄蜂慨澶嶅強鏃ュ父鍊欓€夊寘鍙戝竷
+
+- 鍩虹嚎 main@c4b9b9e锛屽師瀛愬寲淇鎻愪氦 5 涓細81f5272銆?748751銆?816187銆?c3de95銆乥64502d銆?
+- **[P1.1: 淇棰勮宸ュ潑涓€閿敓鎴愰噸澶嶉璁綢D]**锛氬湪 deskpet.ts 寮曞叆 timestamp + random + counter 鐢熸垚鏈哄埗涓?currentList.some 鍐茬獊妫€娴嬮槻鎶栵紝褰诲簳娑堥櫎瀵嗛泦鍚屾鎵归噺淇濆瓨涓嬬殑 ID 鍐茬獊锛涘崟娴嬮獙璇佽繛缁?24 鍔ㄤ綔 ID 涓ユ牸鍞竴銆?
+- **[P1.2: 淇鎴愬鎵嬪娍閲嶆柊缂栬緫涓㈠け璧锋墜鏀舵墜鍔ㄤ綔]**锛氬湪 SettingsPanel.vue 涓 applyWorkshopSnapshot銆乴oadPresetIntoEditor銆乸reviewEditingSequence 琛ュ厖 s.motion 鐨勬繁鎷疯礉淇濈暀锛岄槻姝㈤噸鏂扮紪杈戞垨鎾ら攢鏃惰捣鎵?鏀舵墜鍘熺敓鍔ㄤ綔琚涪寮冦€?
+- **[P1.3: 淇瀹夸富瀵兼紨灏嗗紓姝ユ帓闃熷洖鎵у綋鎴愯鍒掑洖澶峕**锛氬湪 SettingsPanel.vue 鐨?sendPromptToHostDirector 鎹曡幏 delivery === 'queued' 涓?queued 鍥炴墽锛屾槑纭睍绀烘帓闃熶腑鐘舵€侊紝鏉滅粷璇姤鏍煎紡閿欒鍜岄噸澶嶆姇閫掋€?
+- **[P2.1: 淇宓屽澶氳鑹叉ā鍨嬪寘鎵弿鍔ㄤ綔璺ㄨ鑹蹭覆鍏**锛氬湪 model-import.ts 鐨?collectVtsSidecars 澧炲姞鐩綍灞傜骇杈圭晫瀹堝崼锛岄亣鍒板寘鍚嫭绔?.model3.json 鐨勫瓙鐩綍鏃跺仠姝笅閽伙紝闃叉瀛愯鑹插姩浣滄敞鍐岃繘鐖惰鑹层€?
+- **[P2.2: 淇鍔ㄤ綔瀵兼紨鏍囧噯澶撮儴杞姩鍙傛暟鍚嶅尮閰峕**锛氬湪 natural-action-planner.ts 澧炲姞 resolveParamKey 鍔ㄦ€佹帰閽堬紝鑷€傚簲鍖归厤 ParamAngle* 涓?Angle*銆丳aramEyeBall* 涓?EyeBall*锛屾仮澶嶅 Hiyori 绛夋爣鍑?Live2D 妯″瀷鐨勫ご閮ㄩ┍鍔ㄣ€?
+- **[P2.3: 琛ラ綈娓叉煋绔?direct_actions 鎵ц鍒嗘敮]**锛氬湪 env.d.ts 涓?RuntimeCommandController 琛ラ綈 direct_actions 杞借嵎涓庢墽琛岃矾鐢憋紝鍦?DeskpetStage.vue 鎺ュ叆鑷劧鍔ㄤ綔缂栬瘧骞朵互 revert 妯″紡鎵ц棰勮銆?
+- **[P2.4: 澧炲姞鍔ㄤ綔瀵兼紨璁″垝绮樿创鍙嶅簭鍒楀寲绌哄€煎閿橾**锛氬湪 natural-action-planner.ts 寮哄寲姝ｅ垯鍖归厤骞惰繃婊?actions 涓殑 null/闈炴硶瀵硅薄锛涘湪 SettingsPanel.vue 澧炲姞 try-catch 鍏滃簳涓庡彲鎿嶄綔鎬ф牸寮忔寚寮曘€?
+- **楠岃瘉涓庝骇鐗?*锛?
+  - 搴旂敤鍗曟祴 1217 椤癸紙1211 閫氳繃銆? 璺宠繃銆? 澶辫触锛夛紝鎻掍欢鍗曟祴 124/124 鍏ㄩ儴閫氳繃锛孨ode/Web 绫诲瀷妫€鏌ラ€氳繃銆?
+  - electron-builder --win --dir 鍒锋柊缁胯壊浜х墿 app/release/win-unpacked/Uta.exe銆?
+  - 鍙戝竷鍘嬬缉鍖?app/release/Uta-0.2.0-win-x64.zip 鐢熸垚灏辩华锛圫HA256: fc713019ea922753fd67d6e3d28dd6760ca0cbb97d44634a01bfb4ecc86a7f93锛夈€?
+- **鐜板満涓庣幆澧?*锛欸it HEAD b64502d锛屾棩鐢?%APPDATA%/uta 瀹屽ソ鏃犳崯銆?
+
+## 2026-11-01 Codex 瀹夸富閰嶅涓庨噸杩炰慨澶?
+
+- 鍩虹嚎 main@52fe990銆傜敤鎴锋巿鏉冧慨澶嶅紑鍙戝疄渚嬪垏鎹㈠埌 Codex 鍚庣绾裤€侀噸杩炴彁绀轰笉缁撴潫鐨勯棶棰樸€?
+- 鎵嬪姩鍒囨崲/閲嶈繛閫氳繃 pet-switch-host 涓哄綋鍓嶅疄渚嬪彂甯?host-pets/<host> 閰嶅锛岀粦瀹氭枃浠朵繚瀛?sharedDiscovery锛涙櫘閫氬紑鍙?鍊欓€夊疄渚嬪拰鏃х粦瀹氶粯璁や粛鐢ㄧ鏈夌鐐广€傚啿绐佹椂涓嶈鐩栧叾浠栧瓨娲诲疄渚嬶紝鍐欑粦瀹氬け璐ュ垯鎭㈠姝ゅ墠绔偣锛涘悓璺緞閰嶅鍙湪鍘熷疄渚嬮€€鍑哄悗閲嶈瘯銆?
+- 鍦ㄧ嚎鐘舵€佸悓鏃堕噰鐢ㄦ湰瀹炰緥鏈€杩戞敹鍒扮殑瀹夸富浼氳瘽銆侶ook 鎺㈡祴 5 绉掕秴鏃讹紝鏃ц姹備笉鑳借鐩栭噸杩炴垨鏂紑鍚庣殑鐘舵€侊紱蹇嵎闈㈡澘绂荤嚎鏃剁粨鏉熺瓑寰呭苟鎻愮ず銆傝缃獥鍙ｇ瓑寰呭紓姝ラ厤瀵圭粨鏋溿€?
+- 鐙珛婧愮爜鍓湰鍙惈鏈杩炴帴淇锛岄伩鍏嶆贩鍏ュ苟琛岀殑鍔ㄤ綔瀵兼紨淇銆傚叏閲忓簲鐢?1212 椤癸紙1206 閫氳繃銆? 璺宠繃锛夈€丯ode/Web 绫诲瀷銆佹瀯寤洪€氳繃銆傜湡瀹為殧绂?Electron 璇佹槑鏈墜鍔ㄩ厤瀵瑰墠鏃犲叡浜鐐癸紝鎵嬪姩閰嶅鍚庡鎴风鍙戠幇鍚屽疄渚嬪苟瀹屾垚 Codex hello锛実etHookStatus 鍦ㄧ嚎锛涚浜屾鍚姩鑷姩鎭㈠閰嶅銆傝繖閲屼娇鐢ㄦ祴璇曚細璇濓紝鐪熷疄 Codex 浠嶉』鍦ㄥ綋鍓?Uta 閲嶅惎銆佺偣鍑婚噸鏂拌繛鎺ュ苟鏀跺埌涓嬩竴娆＄湡瀹?hook 鍚庨獙鏀躲€?
+- 鐜板満鏃ョ敤涓殑婧愮爜寮€鍙?profile 涓?dev-f7e444bba875銆傚師涓昏繘绋嬪皻鏈噸鍚姞杞戒慨澶嶃€傚伐浣滃尯鍙︽湁鐢ㄦ埛鐨勯璁俱€佸鍏ャ€佸姩浣滃婕斾慨澶嶏紱鏈鍙彁浜よ繛鎺ユ敼鍔紝DeskpetStage.vue 浠呮殏瀛?reconnect 鐨勪袱琛屼慨鏀广€傛湭瀹夎鎴栭噸鍚?Codex 鎻掍欢銆?
+
+
+## 鏈€鏂帮細[LIVE2D-CAPABILITY-FACTS: 鑳藉姏浜嬪疄涓庡彧璇昏瘖鏂璢
+
+- 鍩虹嚎 `8791928`锛屾彁浜?`637315c`銆乣29f29df`銆乣a43ca9a`銆乣297df13`銆乣0881805`銆乣8eee8f0`銆傛湰杞彧琛ヤ簨瀹炲鍑恒€佽瘖鏂€佽瘯鍚叆鍙ｅ拰瀵煎叆淇濇姢锛屼笉鏀规挱鏀俱€佷紭鍏堢骇銆侀璁炬墽琛屻€佽缃?UI 鎴栭粯璁よ〃婕旇氨銆傚畬鏁磋褰曡 [瀹炴柦缁撴灉](results/live2d-capability-diagnostics-20261101.md)銆乕閲嶅楠岃瘉](results/dafish-reimport-20261101.md)銆乕璧勬簮璇曞惉涓庨粦鍧椾慨澶峕(results/dafish-resource-audition-20261101.md)銆?
+- inspection 灏嗘瘡鏉?motion 鐨?`Meta.Duration`/`Meta.Loop` 鍜?`Parameter`銆乣Model`銆乣PartOpacity` 鏇茬嚎鍒嗗紑淇濈暀锛涜兘鍔?profile 瀵规棫 schema v1 鍚戝悗鍏煎銆俙buildModelCapabilityFacts()` 杈撳嚭妯″瀷绛惧悕銆丆ore 鍙傛暟銆佽〃杈惧紡鍐欏叆銆佸師鐢熷姩浣溿€佹湁鏁?focus/鍙ｅ瀷/adapter 缁戝畾鍙婄粨鏋勫寲璇婃柇锛岃緭鍑轰笌杈撳叆瀵硅薄鑴辩銆?
+- 鏀跺熬鎻愪氦 `297df13` 琛ュ叏浜嗕簨瀹烇細`modelUrl`銆乣motionGroups`銆乣unregisteredExpressions`銆乣parts/poseGroups`銆乤dapter 鐨?base/hidden/controls锛屼互鍙婂簲鐢ㄥ唴 `resolved.baseParameters/controls`锛堝惈 defaultActive銆乭idden/shown parts銆乭eld锛夈€傛湭娉ㄥ唽 exp3 鐜板湪鎸夋棫鏍￠獙鍣ㄥ悓鏍疯鍒欏弬涓庤〃鎯呭垽鏂紝涓嶅啀璇姤缂哄け锛涙柊澧?`missing-part`锛岄粯璁ゅ彛鍨嬪弬鏁扮己澶遍檷涓?warning銆?
+- 鎺у埗鍙版柊澧?`deskpetInspectModelFacts()`锛涙棫 `deskpetInspectModel()` 淇濈暀涓虹畝琛ㄣ€俛dapter 鏍￠獙鍜?`MODEL-ADAPTER-SPEC.md` 宸叉敼涓烘帹鑽愭柊鍏ュ彛銆備笓椤硅剼鏈负 `npm run test:live2d-capabilities`锛涙柊娴嬭瘯宸插悓鏃跺姞鍏?`npm test` 涓诲垪琛ㄣ€?
+- 鐪熷疄 Hiyori锛歚Tap#1` = 2100 ms銆乴oop銆?3 Parameter 鏇茬嚎銆? Model銆? PartOpacity锛坄PartArmA/PartArmB`锛夛紱`emotion:happy`銆乣animation:wave`銆乣animation:cheer` 鍏辩敤瀹冿紝浣嗕笁涓涔夊垎鍒骇鐢?review锛屼笉鑳芥嵁缁撴瀯浜嬪疄澹扮О鐢婚潰鎴愮珛銆?
+- 鐪熷疄澶ц偉楸硷細闅旂 profile 閲嶅宸叉仮澶?23 涓〃鎯呫€? 涓姩浣溿€?09 涓弬鏁般€?47 涓儴浠讹紝鐪熷疄 Electron 鍔犺浇骞跺惎鍔?`IDLE` 鎴愬姛锛涜瑙?[閲嶅楠岃瘉](results/dafish-reimport-20261101.md)銆傛寜鐢ㄦ埛鏄庣‘閫夋嫨鈥滆鍥炴棩甯稿苟澶囦唤鈥濓紝宸叉妸瀹屾暣妯″瀷鍜?adapter 鍚屾鍒版棩鐢?`C:/Users/Administrator/AppData/Roaming/uta/models/imported-character-072c7e1cdc`锛涙棫鐩綍澶囦唤鍦?`%APPDATA%/uta/.model-import-backups/dafish-pre-sync-20261101`銆傛棩甯哥湡瀹炲疄渚嬪凡鍔犺浇 23 琛ㄦ儏/8 鍔ㄤ綔銆?1 鎺т欢銆? 鎯呯华锛屾埅鍥炬棤榧诲瓙榛戝潡锛涜瑙?[鏃ュ父鍚屾](results/dafish-daily-sync-20261101.md)銆?
+- 閲嶅鍚庣殑鐢熸垚 adapter 浠嶅彧缁戝畾 `idleMotions: ["IDLE"]`銆乫ocus 鍜屽彛鍨嬶紱浠呴潬瀹冧細瀵艰嚧榧诲瓙钂欑増榛戝潡鍥炲綊銆傚凡瑁呭洖浠撳簱宸茬煡 adapter锛屽苟鍦ㄥ鍏ュ櫒鍔犲叆鈥滄浛鎹㈤噸瀵间笖婧愬寘鏃?adapter 鏃朵繚鐣欑洰鏍?adapter鈥濈殑淇濇姢锛涚湡瀹炴浛鎹㈤噸瀵奸獙璇?23 琛ㄦ儏/8 鍔ㄤ綔銆? 涓?base 鍙傛暟銆?1 鎺т欢銆? 鎯呯华鍜屼袱涓殣钘忕綉鏍奸兘淇濈暀锛岃繎鏅棤榛戝潡銆?
+- 鏂板鍘熺敓琛ㄦ儏璇曞惉鍏ュ彛 `deskpetListExpressions()` / `deskpetPreviewExpression()` / `deskpetClearExpression()`锛屽凡瀹屾垚 23 琛ㄦ儏銆? 鍔ㄤ綔銆?0 甯ц仈绯昏〃銆傚叏韬?鏈嶈/閬撳叿琛ㄦ儏鍜屾墜閮ㄥ姩浣滃彲瑙侊紱`鑴哥孩`杩戞櫙鍙锛涘厰鐗欍€佸湀鍦堢溂銆佸睉銆佹祦鍐锋睏銆佹祦娉€佺埍蹇冪溂銆侀粦鑴搞€侊紴锛溿€佸崟鐗囩溂闀滅殑鑴搁儴鏈轰綅浠嶄笉澶熸竻妤氾紝涓嶈兘鎹瀹ｇО瑙嗚楠屾敹瀹屾垚銆傛墍鏈?8 涓姩浣?`Meta.Loop=true`锛屾帴鍏ヨ鍒掑繀椤诲０鏄庣粨鏉熺瓥鐣ャ€?
+- 鏂板鍐呯疆閫傞厤鐩綍锛坄b392071`锛夛細闈欐€?adapter 闅忕▼搴忓彂甯冿紝鎸夋ā鍨嬬鍚嶇簿纭尮閰嶏紱瑙ｆ瀽椤哄簭涓烘湰鍦?`deskpet-adapter.json` 鈫?鍐呯疆绛惧悕鍖归厤 鈫?鑷姩鑽夌銆傚ぇ鑲ラ奔宸查獙璇?adapter 宸叉寜鎭㈠鍚庣殑绛惧悕鍐呯疆锛涗复鏃剁Щ璧版湰鍦?adapter 鍚庣湡瀹?Electron 浠嶄互 `adapterSource: builtin-adapter` 鍔犺浇 23 琛ㄦ儏/8 鍔ㄤ綔銆?1 鎺т欢銆? 鎯呯华鍜屼袱涓殣钘忕綉鏍笺€傝瑙?[鍐呯疆閫傞厤楠岃瘉](results/dafish-builtin-adapter-20261101.md)銆?
+- 楠岃瘉锛氬簲鐢?1177 椤癸紙1171 閫氳繃銆? 璺宠繃锛夈€佷笓椤?163 椤癸紙158 閫氳繃銆? 涓换鍔℃湰鍦扮湡瀹?DS 鏍锋湰鏉′欢璺宠繃锛夈€丯ode/Web 绫诲瀷銆佸叡浜绾︺€佹瀯寤洪€氳繃锛涢噸瀵笺€佹浛鎹繚鎶ゃ€佸唴缃洖閫€鍜屾棩甯稿姞杞藉潎鏈夌湡瀹?Electron 璇佹嵁銆傛棩甯?profile 鐨勬ā鍨嬬洰褰曞凡鎸夌敤鎴烽€夋嫨鍚屾锛屽涓婚厤缃?TTS/瀵嗛挜鏈敼锛沗win-unpacked` 宸茬敤 `b392071` 閲嶅缓锛屽寘鍚?DS/Hiyori銆佸唴缃€傞厤鍜屾柊浠ｇ爜锛岀敤鎴峰揩鎹锋柟寮忓凡淇濈暀銆?
+- 涓嬩竴姝ワ細鍏堟妸鑴搁儴鐗瑰啓鏈轰綅淇锛岄噸鎷?9 涓湭鐪嬫竻鐨勮劯閮ㄨ〃鎯咃紱鍐嶆妸宸茬湅娓呯殑鏈嶈/閬撳叿琛ㄦ儏鍜?8 涓姩浣滄槧灏勫埌 adapter/琛ㄦ紨璁″垝銆備箣鍚庡啀鍋氣€滅粺涓€瑙ｆ瀽褰卞瓙瀵圭収鈥濓紝adapter/棰勮鎶曞奖涓哄悓涓€璁″垝锛屽厛璁板綍閫夋嫨銆佽祫婧愬拰鍙傛暟鍗犵敤锛屾棫鎾斁缁х画鎵ц銆備笉瑕佺洿鎺ヨ烦鍒拌〃婕旇氨銆乁I 鎴栭粯璁よ氨銆傞涓敾闈㈠鐓т粛鏄?DS鈥滆交寮€蹇冣€濅繚鎸佸彛鍨嬪拰榧犳爣 focus锛屼絾灏氭湭楠岃瘉璇ヨ〃鐜般€?
+
+## 鏈€鏂帮細[RELEASE: 0.2.0 绋冲畾 ZIP]
+
+- 鐗堟湰鎻愬崌鍒?`0.2.0`锛孼IP 鏉ユ簮 `147920a`锛坄dirty:false`锛夛紝浜х墿 `app/release/Uta-0.2.0-win-x64.zip`锛孲HA-256 `e55fbfb588a536e65ab72ab20ed8b7194c99efaed3d858cd126047806a187dd0`锛沗sharePackage:true`锛屽惈 `DS-control/c_0120` 涓?`hiyori_pro_zh`锛孌SH 鎻掍欢璧勬簮涓?0.5.6銆?
+- 鍙戝竷闂ㄧ锛氬簲鐢?**1153 椤癸紙1147 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**124/124**锛宼ypecheck 涓庢瀯寤洪€氳繃锛涜В鍘?ZIP 鍚庝互闅旂 profile 鐪熷疄鍚姩锛岀幆澧冪増鏈?0.2.0銆佸仴搴锋鏌ユ甯搞€佽缃竷椤靛彲杈俱€? 娓叉煋閿欒銆?
+- 鎵撳寘淇锛氭柊澧炵殑 `yauzl` 妯″瀷瀵煎叆渚濊禆鍘熷厛琚?electron-builder 鎺掗櫎锛屽鑷磋В鍘嬪寘鍚姩鎶?`Cannot find module 'yauzl'`锛涘凡鍦ㄤ富杩涚▼鏋勫缓涓唴鑱旇渚濊禆骞堕噸鏂版墦鍖呫€傚彟灏?ZIP 鏋勫缓鏀逛负浣跨敤鏈湴 Electron锛岄伩鍏嶄笅杞?TLS 澶辫触銆?
+- 鏈仛锛氭病鏈夋浛鎹㈡棩甯?stable 鏁版嵁銆佹病鏈夎缃?`operations/stable.json`銆佹病鏈夊畨瑁?閲嶅惎鐪熷疄瀹夸富銆佹病鏈夌鍚嶏紱DSH 杩愯瀹炰緥浠嶆槸鏃ф彃浠躲€傜湡瀹炲涓荤鍒扮鍜?8 灏忔椂/7 澶╅獙鏀朵粛寰呭畬鎴愩€?
+
+## 鏈€鏂帮細鏈疆鏍稿績瀹炴柦宸叉敹鍙?
+
+- Antigravity 0.1.7锛氭墍鏈夎鑹叉寚浠ら檮 v2 conversation/event 褰掑睘锛屽鎵逛篃甯?session锛泈orkspacePaths 鍙湁涓€涓湁鏁堢洰褰曟墠缁戝畾锛屽鐩綍浠ユ樉寮忕┖ cwd 娓呴櫎鏃у崟鐩綍銆俇NKNOWN Stop 鍥?idle锛屼笉鍙戞垚鍔熸垨鏆傚瓨鎽樿銆傞粯璁ゆ枃鏈粛鍦ㄥ涓汇€?
+- 鍏变韩 hook 鍜?Qoder 璁板綍 busy/idle/unknown锛岃妭娴侀敭鍚椿鍔ㄧ姸鎬侊紱PreToolUse鈫扴top 鍗充娇闂撮殧涓嶈冻 2 绉掍篃鑳借惤 idle銆俽esume 浼氳瘽 busy 鏃剁姝㈠惎鍔紝Qoder CLI 蹇呴』 idle锛涜緭鍏ユ墦寮€鏃舵瘡 2 绉掑埛鏂板彲鐢ㄦ€с€侰odex/OpenCode queue 涓嶅啀琚渶杩?2.5 绉掔殑浜嬩欢鎸′綇銆?
+- OpenCode 姣忎釜鎻掍欢妗ュ啓鐙珛 UUID 鏂囦欢锛岄€愪細璇濅繚瀛?nativeBridgeId锛涘彂閫?灏辩华妫€鏌ヤ娇鐢ㄦ寚瀹氭ˉ涓旂己澶变笉鍥為€€ global latest銆傚吋瀹规棫 metadata 鐨?global 鏂囦欢浠呭湪鏈寚瀹氭ˉ鏃朵娇鐢ㄣ€傛祴璇曡鐩?A 鎵€灞炴ˉ涓?B 鍏ㄥ眬妗ュ悓鏃跺瓨鍦ㄣ€丄 娑堝け鍚庝笉鎶?B銆?
+- fixed session 鐨?cwd 浼樺厛浣跨敤绮剧‘淇濆瓨璁板綍锛岀┖ cwd 涓嶅€熸棫 runtime.cwd銆傚崗璁槑纭┖ session_bind.cwd 浼氭竻闄ゆ棫鏍癸紝缂虹渷浠嶄繚鐣欍€?
+- 鏈€缁堝簲鐢?1147 閫氳繃/6 璺宠繃銆佹彃浠?124/124锛汵ode/Web 绫诲瀷銆乤pp/plugin 鏋勫缓閫氳繃銆傛ā鍨嬪鍏?GUI 鐨勬渶缁堣瘉鎹?`gui-import-result.json` 鍚墠鍚庤兘鍔涗笌 Live2D 棰勮閫氳繃锛涚鏈夎繘绋嬪凡閫€鍑恒€佺鐐圭Щ闄わ紝7 涓殧绂?profile 淇濈暀锛堣嚜鍔ㄥ鎵规嫆缁濋€掑綊鍒犻櫎锛屽彧杩斿洖 blocked by policy锛夛紝鏃ュ織/鎴浘/鑴氭湰淇濈暀 `.tmp/host-adaptation-20261031`銆備富鐩綍 main锛屾簮鐮佹彁浜ゆ竻妤氾紝鏃犵湡瀹炶处鍙蜂换鍔°€佸涓诲畨瑁?閲嶅惎鎴栨棩甯告暟鎹啓鍏ワ紱app/out 宸叉洿鏂帮紝娌℃湁鏈疆鏈€缁?ZIP銆?
+- 鍓╀綑楠屾敹锛氱湡瀹?Codex/Claude/ZCode 绮剧‘缁細璇濓紝Qoder CLI锛堝疄楠岋級瀹為檯 JSON 涓庡苟鍙戣涔夛紝OpenCode 2.x 鐪熷疄 SDK/鎻掍欢鍔犺浇锛孉ntigravity 鍚勮〃闈㈠疄闄呭鎵归噰鐢紝鏈€缁堝寘銆傚彲閫変簰鍔ㄥ洖浼?鐘舵€佽妭濂?闂鍗?STT/OBS/璧板姩/Cortico 娌℃湁榛樿鍚敤锛屼笉鑳芥嵁鏈疆瀹ｇО鍏ㄩ儴瀹屾垚銆?
+
+## 鏈€鏂帮細瑙掕壊瀵煎叆涓庤兘鍔涚増鏈?
+
+- `model-import.ts` 鍙殏瀛樻暟鎹瀷鏂囦欢锛岄檺鍒?ZIP/鐩綍鏁伴噺銆佸ぇ灏忋€佽矾寰勩€侀摼鎺ワ紱Live2D 蹇呰 Moc/璐村浘妫€鏌ワ紝缂哄彲閫夎祫婧愰檷绾ц褰曪紝ImageSet 榛樿鍥惧繀瑕併€備复鏃舵竻鍗曚笉鏀瑰師鏂囦欢銆倀oken 缁戝畾 settings sender锛屽彇娑?鍏抽棴娓呯悊锛涢瑙堥€氳繃鍙楁帶 uta://model-import 璇诲彇銆?
+- 淇濆瓨澶嶅埗鍒?prepared 鍚庡啀澶嶆牳锛屾棫鐩綍绉诲嚭 models 鍚庣敤宸插噯澶囩洰褰曞師瀛愭浛鎹紱journal 鍦ㄨ繘绋嬩腑鏂悗鎭㈠鏃х洰褰曪紝鎭㈠璁板綍鎹熷潖鍙叧闂鍏ワ紝涓嶉樆姝㈠惎鍔ㄣ€傜敤鎴峰綋鍓嶈鑹插湪淇濆瓨闃舵涓嶅垏鎹紱鍚屽悕鏇挎崲闇€鏄庣‘鍕鹃€夈€倅auzl 2.10.0 浠庣幇鏈変緷璧栨彁鍗囦负鐩存帴杩愯渚濊禆銆?
+- 鐙珛 ModelImportPreview 澶嶇敤 Core/Pixi 鍔犺浇锛岃缃獥鍙ｆ樉寮忓畨瑁呭凡鏈夌殑 CSP 鍏煎妯″潡锛涗笉鏀惧 unsafe-eval銆傚彇娑堥攢姣佹ā鍨?绾圭悊锛涘綋鍓嶆瀹犱笉鍙楅瑙堝奖鍝嶃€?
+- 妯″瀷涓婁笅鏂囧惈 ready/kind/revision/animations銆傛瘡娆℃ā鍨?鑳藉姏/棰勮鍙樺寲浜х敓鐗堟湰锛孧CP 璁颁綇鏌ヨ鐗堟湰骞跺湪鍚庣画鍔ㄤ綔鎼哄甫锛涜繍琛屾椂鎷掔粷鏃х増/鍔犺浇涓?涓嶆敮鎸佸姩浣滐紝鍚?renderer 闄勫疄闄呯増鏈紝renderer 鍐嶆嫤鎴崲妯″悗杩熷埌鍔ㄤ綔銆侷mageSet 鍙姤鍛婅嚜韬〃鎯咃紝鏃?Live2D 鍔ㄤ綔/棰勮銆?
+- 搴旂敤 1145 閫氳繃/6 璺宠繃锛屾彃浠?123/123锛孨ode/Web 绫诲瀷銆乤pp/plugin 鏋勫缓閫氳繃銆傜湡瀹?Electron 绉佹湁 host-import-test7 璇佹槑绔嬬粯棰勮鈫掍繚瀛樹繚鎸?Hiyori鈫掔偣鍑讳娇鐢ㄥ垏闈欐€併€佽兘鍔涚増鏈彉鍖栦笖鍔ㄤ綔/棰勮涓虹┖銆丩ive2D Hiyori 鐙珛棰勮銆?080/760 鏃犳孩鍑恒€傜粨鏋?鎴浘淇濈暀鍦?`.tmp/host-adaptation-20261031`锛屾墍鏈夋祴璇?Electron 宸查€€鍑猴紝7 涓?profile 淇濈暀锛堣嚜鍔ㄥ鎵规嫆缁濇竻鐞嗭級銆傛棩甯告暟鎹?鐪熷疄瀹夸富鏈啓锛屽皻鏃犳渶缁?ZIP銆?
+- 涓嬩竴姝ユ敹鍙?Antigravity 浜嬩欢褰掑睘鍜?resume 瀹夸富蹇欑妫€鏌ワ紱鍙€変簰鍔ㄥ洖浼犲拰鐘舵€佽妭濂忔寜鍘熸柟妗堝鐞嗭紝STT/OBS/璧板姩/Cortico 涓嶅湪鏈疆榛樿鑼冨洿銆?
+
+## 鏈€鏂帮細Qoder CLI 涓庢闈㈣矾绾垮垎绂?
+
+- 鏂板闅忓寘 `runtime/launch-qoder-cli.mjs`锛堟簮鐮?scripts 鍚屽悕鏂囦欢锛夈€傛樉寮忕粷瀵?CLI 绋嬪簭/宸叉湁閰嶇疆鐩綍锛屽綋鍓嶈繘绋嬬幆澧冪櫥璁拌〃闈紱鑷姩甯︽湰鎻掍欢鐩綍銆傚叏灞€閰嶇疆/鐜鏈慨鏀广€?
+- hook 鍘熷瓙淇濆瓨閫愪細璇?metadata锛屽惈 surface/executable/config/plugin/permission锛涘彧鏈夋槑纭?CLI 瀹屾暣鐧昏鍙彂閫侊紝涓昏繘绋嬩笉浠庢闈細璇濈寽 CLI 閰嶇疆銆侸SON 杈撳嚭鎸夌洰鏍?ID 楠岃瘉锛屾潈闄愭樉寮忕户鎵裤€?
+- Qoder 鎻掍欢 0.1.11銆備慨姝?Codex MCP 缂撳瓨鍥為€€璺緞鍒版彃浠?0.2.3锛屽苟浠?manifest 妫€鏌?hello SDK 鐗堟湰锛岄伩鍏嶄袱涓増鏈笉鍚屾銆?
+- 搴旂敤 1138 閫氳繃/6 璺宠繃锛屾彃浠?122/122锛孨ode/Web 绫诲瀷涓庢彃浠舵瀯寤洪€氳繃锛涚湡瀹?Qoder CLI/妗岄潰鍜?OpenCode 2.x 鐢婚潰浠嶆湭楠屾敹銆傛棤鏈疆閬楃暀鏈嶅姟鎴栫湡瀹炲畨瑁呮敼鍔ㄣ€備笅涓€姝ユā鍨嬪鍏ヤ笌鑳藉姏鍙樻洿鍛婄煡銆?
+
+## 鏈€鏂帮細瀹夸富閫傞厤绗簩鎵光€斺€旂湡瀹炶兘鍔涗笌缁撴瀯鍖栫粨鏋?
+
+- `getHostInputStatus()` 鏄富杩涚▼缁熶竴鐘舵€佹潵婧愶紝缁忓彈淇?IPC 缁欒緭鍏ユ鍜岃繛鎺ラ〉锛涗笉鍐嶇敱 renderer 鍐欐 host 鍒楄〃銆傚尯鍒?implementation/configuration/session readiness銆?
+- Claude `--output-format json`銆乑Code `--json` 鎸夌洰鏍?session 瑙ｆ瀽锛涘彧浣跨敤瀹夸富缁撴灉瀛楁锛屾棩蹇椾笌宸ュ叿鏂囨湰鎺掗櫎銆傚凡鎺ユ敹浣嗗鐞嗗け璐ユ爣 completed锛屼笉鎭㈠閲嶅彂鑽夌銆?
+- OpenCode 鐜版湁鎻掍欢瀹為檯涓?2.0.32锛屾棫璁″垝鐨?1.x 鍩虹嚎鎺ㄦ柇鏈夎锛屽凡绾犳鏂囨。銆傛彃浠跺缓绔嬫湰鏈洪壌鏉冩ˉ锛屼互 `ctx.session.get` 鏍￠獙 ID/cwd锛宍ctx.session.prompt(delivery:queue)` 鎸佷箙杈撳叆绠卞洖鎵ф樉绀?queued锛涙ˉ缂哄け涓嶆敼璧扮鐩?1.14.31 CLI銆?
+- OpenCode 鎵撳寘鏀圭敤 bundler锛屾墍鏈夋寚浠ら檮 v2 meta锛涗細璇濆厓鏁版嵁鎸?ID 淇濆瓨锛屾棩蹇椾笌妗ヨ窡闅忔樉寮?runtime锛孴odo 鍙湪 success 纭銆傚伐鍏风紦瀛樹互 session+callID 闅旂锛岄€€鍑哄彧鍒犳湰 token 妗ユ枃浠躲€傚叡浜?hook 涔熺姝?PreToolUse 鎻愬墠鎻愪氦 Todo銆?
+- 鎻掍欢鐗堟湰锛欳laude 0.1.10銆乑Code 0.1.7銆丆odex 0.2.3锛涢渶閰嶅鏇存柊锛屾湭鏀圭湡瀹炲涓诲畨瑁呫€傚簲鐢?1137 閫氳繃/6 璺宠繃銆佹彃浠?121/121銆佺被鍨嬩笌鏋勫缓閫氳繃锛涙湰杞棤閬楃暀娴嬭瘯鏈嶅姟/杩涚▼锛屾棤鏃ュ父鏁版嵁鍐欏叆銆?
+- 涓嬩竴鎵癸細Qoder CLI 涓庢闈㈣〃闈㈠垎娓咃紝鍐嶅仛妯″瀷瀵煎叆/鑳藉姏鍙樻洿鍛婄煡銆傜湡瀹炲涓?鐢婚潰/鏈€缁?ZIP 楠屾敹灏氭湭寮€灞曘€?
+
+## 鏈€鏂帮細瀹夸富閫傞厤绗竴鎵光€斺€旀姇閫掔粨鏋滀笌绮剧‘浼氳瘽鍏冩暟鎹?
+
+- DSH 淇宸插鏍告暣鍚堜负 `636560d`锛岀敤鎴风‘璁ゅ厑璁告帴鎵嬶紝鍩虹嚎骞插噣銆傚疄鏂界洰鏍囪 [浠诲姟璁板綍](tasks/host-adaptation-20261031.md)銆?
+- `HostBridgeResult.delivery` 鍖哄垎鏈彂閫?鎺掗槦/鎺ユ敹/宸插畬鎴?鏈煡锛況enderer 浣跨敤鍚屼竴鎶曞奖锛寀nknown 涓嶅綋浣?failed 鍥炲～銆傚巻鍙蹭繚鐣?v1锛屾柊澧炲彲蹇界暐鐨?`deliveryStage:queued`锛屾棫璇昏€呬粛鍙鍙?sent銆傛埅鏂殑 DSH HTTP 鍝嶅簲涔熶細鏀跺熬涓?unknown锛屼笉鎮寕鎴栬ˉ鍙戙€?
+- 鍏变韩 hook 鍘熷瓙鍐欐渶鏂拌褰曚笌 `hooks/sessions/<host>/<sha256(sessionId)>.json`锛屾寜浼氳瘽淇濈暀 cwd銆丆ODEX_HOME/CLAUDE_CONFIG_DIR 鏉ユ簮鍙?ZCode 鏉冮檺妯″紡锛涘浐瀹氱洰鏍囧彧琛ュ叆 ID 鍖归厤鐨勮褰曪紝鍏煎鍙湁鏈€鏂版枃浠剁殑鏃ф彃浠躲€傚彂閫佸墠鏍稿 host 骞跺鍒剁洰鏍囷紝IPC 鏍稿褰撳墠缁戝畾骞冲彴銆?
+- 鏈満 ZCode 0.16.9 宸叉牳瀹烇細prompt 鐨勯粯璁?yolo 浣滀负 modeOverride 浼樺厛浜庝繚瀛樻ā寮忋€傜幇鐢卞彲淇?hook 鐨?permission_mode 鐧昏锛屾湭鐭ユā寮忔嫆缁濈洿鍙戯紝宸茬煡妯″紡鏄惧紡浼犲叆銆傛湭杩愯鐪熷疄璐﹀彿楠岃瘉锛涙柊鎻掍欢蹇呴』閰嶅鏇存柊鍚庢墠鏈夋柊鐧昏淇℃伅銆?
+- 鏂板琛屼负鍥炲綊瑕嗙洊鎺掗槦鎸佷箙鍖?閲嶅惎銆乽nknown 涓嶆仮澶嶈崏绋裤€佽法瀹夸富鐩爣銆乑Code 鏈煡妯″紡涓嶅惎鍔ㄤ笌鏄惧紡 plan銆丄/B 鍏冩暟鎹殧绂汇€丏SH 閮ㄥ垎鍥炴墽銆傚叏閲忓簲鐢?1132 閫氳繃/6 璺宠繃銆佹彃浠?117/117銆佺被鍨嬩笌鏋勫缓閫氳繃銆?
+- 鐜板満锛氭湰杞棤 Electron 瀹炰緥/profile锛屾棤鏂板悗鍙版湇鍔★紝鏈畨瑁呯湡瀹炴彃浠躲€佹湭鏀规棩甯告暟鎹€傛棩蹇楀湪 `.tmp/host-adaptation-20261031`锛涗笅涓€鎵圭户缁粺涓€鑳藉姏鏉ユ簮涓庡涓荤粨鏋勫寲杈撳嚭锛屽悗缁ā鍨嬪鍏ュ拰浜掑姩鎸変换鍔¤褰曟帹杩涖€?
+
+## 鏈€鏂帮細2026-10-31 淇 [P1: DSH 鎸囧畾浼氳瘽澶辨晥鏃舵秷鎭鎶曞叾浠栦細璇漖 涓?[P2: DSH 鍘熺敓妗ュ洖鎵т腑鏂悗鑷姩鍥為€€鍛戒护琛屽彲鑳介噸澶嶆姇閫抅
+
+- 鍩虹嚎 `main / f98bbef`锛堝鏌ユ姤鍛婃彁浜わ級锛屽紑宸ュ伐浣滃尯骞插噣銆傚伐浣滅洰褰?`D:/Frankenstein/Uta`锛屽垎鏀?`main`锛屾湭鎻愪氦 4 涓枃浠讹紱鏈疆鏈畨瑁呮彃浠躲€佹湭鍚姩 Uta銆佹湭鍐欐棩甯告暟鎹€?
+- **[P1: DSH 鎸囧畾浼氳瘽澶辨晥鏃舵秷鎭鎶曞叾浠栦細璇漖** 涓ゅ眰閮介敊锛屼袱灞傞兘鍫碉細
+  - 鎻掍欢 `src/index.mjs` 鍘熺敓妗?`/message`锛氭棫閫昏緫 `agents.get(requested) 鈫?娲诲姩浼氳瘽 鈫?鏈€鍚庝竴涓?root` 涓夌骇鍥為€€銆傜幇鍦?*鏈夋樉寮?`sessionId` 灏卞彧绮剧‘鏌ヤ竴娆?*锛屾煡涓嶅埌鍥?`409 session-not-found`锛涙煡鍒拌繕澶嶆牳 `agent.session.id`锛屼笉涓€鑷村洖 `409 session-mismatch`锛?*鍙湁璋冪敤鏂瑰畬鍏ㄦ病缁?`sessionId`** 鏃舵墠鍏佽娲诲姩浼氳瘽/root 鍏滃簳銆?
+  - 涓荤▼搴?`app/src/main/host-bridge.ts`锛氭棫閫昏緫鍙 `ok && accepted` 鍐嶆妸璇锋眰 ID 瑕嗙洊鍥炲幓锛坄{ ...native, sessionId: session.sessionId }`锛夈€傜幇鍦ㄦ牎楠屽洖鎵х殑**瀹為檯鎺ユ敹浼氳瘽**锛屼负绌烘垨涓嶇瓑浜庣洰鏍囧氨杩斿洖 `ok:false / code:'no-session'`锛屽苟鏄庤"瀹夸富鍥炴姤鐨勬帴鏀朵細璇濇槸銆孹銆嶏紝涓庣洰鏍囥€孻銆嶄笉涓€鑷?銆?
+- **[P2: DSH 鍘熺敓妗ュ洖鎵т腑鏂悗鑷姩鍥為€€鍛戒护琛屽彲鑳介噸澶嶆姇閫抅** `sendNativeHarnessMessage()` 浠庛€岀粨鏋滄垨 null銆嶆敼鎴愪笁鎬侊細`unavailable`锛堟ˉ淇℃伅缂哄け/杩囨湡銆丠TTP 401/404銆乣ECONNREFUSED`/`EHOSTUNREACH`/`ENETUNREACH`/`ENOTFOUND`/`EADDRNOTAVAIL`/`EACCES`銆佽姹傛湭鍒峰嚭鍗虫姤閿欙級鎵嶅厑璁稿洖閫€ CLI锛沗unknown`锛?s 瓒呮椂銆佸彂鍑哄悗 `ECONNRESET`/`EPIPE`锛?*绂佹鍥為€€**锛岀洿鎺ユ姤"娑堟伅鍙兘宸茬粡閫佸埌瀹夸富锛屼负閬垮厤閲嶅鎶曢€掞紝杩欐娌℃湁鑷姩鏀圭敤鍛戒护琛岄噸鍙?锛沗result` 鍘熸牱杩斿洖銆傝姹備綋鏂板 `messageId`锛坄crypto.randomUUID()`锛夌敱鎻掍欢鍥炰紶锛屼粎浣滃洖鎵у叧鑱旓紝**涓嶆槸**璺ㄩ€氶亾骞傜瓑銆?
+- 鍥炲綊锛堟瘡鏉￠兘楠岃瘉杩囥€屽湪鏃т唬鐮佷笂澶辫触銆嶏級锛?
+  - `plugin/tests/deepseek-harness-plugin.test.cjs` +3锛氱洰鏍囧け鏁堜笉寰楁敼鎶曪紙鍏堟妸娲诲姩浼氳瘽璁炬垚 B 鍐嶈姹?A锛夈€佺簿纭懡涓苟鍥炰紶 `messageId`銆佹棤鐩爣鏃朵粛鎸夋椿鍔ㄤ細璇濆厹搴曘€?
+  - `app/tests/host-bridge.test.cjs` +4锛氬洖鎵т細璇濅笉涓€鑷翠笉寰楁姤鎴愬姛銆佺洰鏍囦笉瀛樺湪涓嶆敼鎶曚笖鐩存帴澶辫触銆佹敹涓嬪悗鏂嚎涓嶅緱鏀硅蛋鍛戒护琛屻€佽繛鎺ヨ鎷掍粛鍏佽鍥為€€銆?
+  - `git stash` 鍗曟枃浠跺楠岋細3 鏉?P1/P2 鏂█鍦ㄦ棫婧愮爜涓婂け璐ワ紝1 鏉°€岃繛鎺ヨ鎷掍粛鍥為€€銆嶆柊鏃ч兘杩囷紙瀹冨畧鐨勬槸鏃㈡湁鍙敤璺緞锛夈€?
+  - 瀹℃煡鏂规帰閽?`.tmp/review-20261031/host-boundary-probes.cjs` 鍥炴斁锛氬湪銆孊 搴旀敹鍒?1 鏉°€嶅瀹炲緱 0 鏉¤€屽け璐?= 鏃?bug 涓嶅啀澶嶇幇锛涗慨澶嶅悗鏈熸湜鐗堟湰鍦?`.tmp/review-fix-20261031/probe-fixed.cjs`锛堜笁鍦烘櫙缁撴灉瑙佸悓鐩綍 `results.json`锛夈€?
+- 楠屾敹锛氭彃浠?**117/117**锛涘簲鐢ㄥ叏閲?**1130 椤癸紙1124 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛沗npm run typecheck` Node+Web 閫氳繃銆?
+- 鎺ユ墜鐘舵€侊細鐢ㄦ埛宸茬‘璁ゅ師浼氳瘽鏀跺熬骞舵巿鏉冩帴鎵嬨€傚悗缁涓婚€傞厤瀹炴柦鍓嶉噸璺戝簲鐢?1124 閫氳繃/6 璺宠繃銆佹彃浠?117/117銆丯ode/Web 绫诲瀷妫€鏌ラ€氳繃锛屽皢鏈壒淇鐙珛绾冲叆鍩虹嚎銆傜湡瀹炶繍琛屼腑鐨勬彃浠舵槸鍚︾敓鏁堜粛闇€鐙珛鏍稿锛屼笉鑳界敱婧愮爜鎻愪氦鎺ㄥ畾銆?
+- 涓嬩竴姝ュ缓璁細鈶?閲嶅惎 DSH 鍚庢寜鎻掍欢 `HANDOVER.md` 搂14.7 / 搂15.4 楠屾敹锛涒憽 鐪熷疄瀹夸富閲屾墜鍔ㄩ獙涓€娆?鐩爣浼氳瘽琚叧鎺夊悗鍐嶇洿鍙?鐨勬彁绀烘枃妗堬紱鈶?鑻ヨ缁?`unknown` 鎬佽ˉ銆屾煡璇㈡姇閫掔粨鏋溿€嶏紝闇€瑕佸涓讳晶鎻愪緵鍙幓閲嶇殑绋冲畾娑堟伅 ID 涓庣粨鏋滄煡璇㈡帴鍙ｏ紝鐩墠鍙湁鍥炴墽鍏宠仈鏍囪瘑銆?
+
+## 涓婁竴杞細2026-10-31 鍙瀹℃煡涓庡畬鎴愬害閲嶈瘎
+
+- 鍩虹嚎 `main / 7638349`锛屽紑宸ュ共鍑€銆傚彧鏂板瀹℃煡璁板綍锛屼笉淇敼涓氬姟浠ｇ爜銆傚畬鏁磋瘉鎹拰璇勪及瑙?[REVIEW-2026-10-31](../REVIEW-2026-10-31.md)銆?
+- **[P1: DSH 鎸囧畾浼氳瘽澶辨晥鏃舵秷鎭鎶曞叾浠栦細璇漖**锛氭彃浠?`index.mjs:1272鈥?277` 瀵规樉寮忕洰鏍囦粛鍥為€€ active/root锛涗富绋嬪簭 `host-bridge.ts:178鈥?83,528鈥?29` 涓嶆鏌ュ疄闄呮帴鏀惰€呭苟鍥炴姤璇锋眰鐩爣銆傜敓浜ф彃浠?鐢熶骇鍙戦€佹ˉ+闅旂 agents 澶嶇幇 A 缂哄け鈫払 鏀跺埌鈫掓姤鍛?A 鎴愬姛銆?
+- **[P2: DSH 鍘熺敓妗ュ洖鎵т腑鏂悗鍙兘閲嶅鎶曢€抅**锛氳姹傚凡缁忚鎺ユ敹锛宻ocket 鏂紑浠嶈繑鍥?null 骞惰嚜鍔?headless 鍥為€€銆傜敓浜фˉ+鏈湴 HTTP/鍋?CLI 澶嶇幇涓€娆℃搷浣滀袱鏉℃姇閫掕矾寰勶紱鐪熷疄 DSH 鏄惁鍐嶆鎵ц鍙栧喅浜?adopt 鐘舵€侊紝涓嶈兘鎶婃湭鐭ョ粨鏋滃綋纭畾澶辫触銆?
+- 搴旂敤 1120/1126锛? 璺宠繃銆? 澶辫触锛夛紝鎻掍欢 114/114锛孧aiBot 17/17锛宯ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€佷笁缁勫绾﹂€氳繃銆傜涓€娆＄郴缁?Python 缂?SDK锛屾敼鐢?MaiBot 鑷甫鐜鍚庨€氳繃銆傛棩蹇?鎺㈤拡鍦?`.tmp/review-20261031`锛屼笉瑕佹暣鐩綍鎻愪氦锛涗慨澶嶆椂灏嗙己闄峰瓨鍦ㄦ柇瑷€鍙嶈浆涓烘寮忓洖褰掋€?
+- 鐜板満锛氭棤 Uta/Electron 杩涚▼锛岄粯璁ゆ棩甯哥鐐逛笉瀛樺湪锛汥SH 鍦ㄨ繍琛屻€俬ooks 鏈€杩戣褰曡繃鎻掍欢 0.5.4锛屽洜姝や笅鏂光€滀粛鏄?0.5.3鈥濈殑鏃х幇鍦哄凡涓嶉€傜敤锛屼絾鏈疆娌℃湁楠岃瘉鐪熷疄鎻℃墜/鏀跺彂銆傛病鏈夋湰杞仐鐣欐湇鍔°€佹病鏈夋柊寤?Electron profile锛屾棩甯告暟鎹強瀹夸富閰嶇疆鏈啓銆?
+- `app/out` 宸叉寜褰撳墠婧愮爜閲嶅缓锛沘lpha.18 鍒嗕韩 ZIP 鐨?manifest/hash 浠嶅搴?`69758f3`锛?0 鏈?26 鏃ワ級锛屾病鏈夋湰杞柊鍖呫€侴UI/褰曢煶/20鈥?0 鍒嗛挓璁板綍寮曠敤鍚屾棩宸叉彁浜ょ殑 POLISH 鏂囨。锛屾湰杞湭閲嶅仛 GUI銆佺湡瀹炶闊炽€侀暱鏃?DPI/鍗囩骇楠屾敹銆?
+- 涓嬩竴姝ワ細鍏堢‘瀹氫笂杩颁袱椤规姇閫掍慨澶嶆柟妗堬紝鍐嶅疄鏂藉洖褰掍笌鐪熷疄瀹夸富閾捐矾锛涗箣鍚庝粠鍚屼竴淇鎻愪氦浜ゆ柊鍊欓€夊苟瀹屾垚鍙戣楠屾敹銆傛棫淇濆瓨閿欒鍜?CODEX_HOME 鍏变韩閿佸凡鏈変慨澶?娴嬭瘯锛屼笉鍐嶆寜鏃у鏌ュ垪涓哄紑鏀鹃棶棰樸€?
+
+## 鏈€鏂帮細[DSH-ADAPT: 閫傞厤 DeepSeek Harness 0.2.1-rc.3 / host protocol 4]
+
+- 鍩虹嚎 `e5ea5e3`锛宍main`锛屽紑宸ユ椂宸ヤ綔鍖哄共鍑€銆傛湰鏈?DSH `0.2.1-rc.3`锛圗lectron 44.7.0 / Node 24.21.0 / `hostProtocolVersion: 4`锛夈€傛彃浠?`0.5.3 鈫?0.5.4`锛宍package.json` 鏂板 `dsh.compat` 璁板綍鍏煎鍩虹嚎锛?*鏁呮剰涓嶅０鏄?`peerDependencies`**锛歚@deepseek-ai/*` 閮芥槸 asar 鍐呯疆鍖咃紝澹版槑浼氳 pnpm 鍘?registry 瑙ｆ瀽鑰屽畨瑁呭け璐ワ級銆傛敼鍔ㄨ鐩栨彃浠堕€傞厤銆佷富杩涚▼ cwd 鏀寔銆佹祴璇曚笌鏂囨。锛屽凡浣滀负涓€娆?DSH 閫傞厤鎻愪氦鍏ュ簱銆?
+- [DSH-ADAPT-A: 浼氳瘽宸ヤ綔鐩綍鍙栭敊] DSH 0.2.x 鐨?`Session` 鍙湁 `get id()`锛屽伐浣滅洰褰曞湪 `session.header.cwd`锛沗tools/execute` 鐨?`exec` 瀵硅薄鍙湁 `token/callId/name/signal/agent/arguments/...`锛?*娌℃湁 `session`**銆傚師浠ｇ爜涓夊鍙栧€硷紙`exec.session`銆乣payload.session.cwd`锛夐兘鏄笉瀛樺湪鐨勫睘鎬э紝闈欓粯閫€鍒?`process.cwd()`锛汦lectron 涓嬮偅灏辨槸 profile 鐩綍 `C:\Users\Administrator\.dsh\profiles\desktop`锛屼簬鏄緟鍔炲綊灞炲拰浼氳瘽鐧昏鍏ㄨ閿欏伐浣滃尯銆傜幇鍦鸿瘉鎹細`%APPDATA%\uta\hooks\harness-session.json` 鐨?`cwd` 灏辨槸杩欎釜 profile 璺緞銆備慨娉曪細鏂板 `sessionCwdOf(obj)` 鎸?`session.header.cwd 鈫?session.cwd 鈫?session.directory 鈫?agent.session.header.cwd` 鍙栧€硷紝`reportHostSession()` 鐨?`cwd` 鏀逛负鍏ュ弬锛宍todo_snapshot` 涓?`tools/execute` 涓ゅ閮借蛋瀹冦€?
+- [DSH-ADAPT-B: 妗屽疇鐩村彂琚?headless 鎷掔粷] rc.3 鐨?`dsh-headless --session-id` 鏄?**adopt 璇箟**锛宍assertAdoptable` 瑕佹眰 `session.header.cwd === process.cwd()`锛屽彟澶栬繕鎷掔粷甯?agent preset 鐨勪細璇濄€乻ubagent/fork 浼氳瘽銆佷互鍙婂湪鏈繘绋嬪瓨娲荤殑浼氳瘽銆俇ta 渚?`spawn()` 浠庢潵娌′紶 `cwd`锛屽瓙杩涚▼缁ф壙 Uta 鑷繁鐨勫惎鍔ㄧ洰褰曪紝鎵€浠ュ繀澶辫触銆備慨娉曪細`HostInvocation` 澧炲彲閫?`cwd`锛宧arness 鍒嗘敮鐢ㄤ細璇濈櫥璁扮殑 `cwd` 鍚姩瀛愯繘绋嬶紱閿欒鏄犲皠琛ヤ笁鏉★紙`runs under agent preset` 鈫?鎻愮ず鏀逛笉甯﹂璁剧殑浼氳瘽銆乣recorded no working directory` / `was recorded in ... not ...` 鈫?`no-session`銆乣is a subagent or forked session` / `is live in this process` 鈫?`busy`锛夈€?
+- [DSH-ADAPT-C: 鍗忚 v2 淇″皝缂哄瓧娈礭 Uta 鍗忚 v2 瑕佹眰 `meta` 甯?`hostId/hostInstanceId/sessionId/turnId/eventId/seq/ts`锛屼笖 `hello.capabilities` 瑕佽鐩?`RUNTIME_CAPABILITIES`銆傛彃浠跺師鏉ュ彧缁?`hostId`锛堝伓灏?`sessionId`锛夛紝`hello` 涔熷皯鎶?`sessionBinding`/`receipts`銆備慨娉曪細鍔犺浇鏃剁敓鎴?`hostInstanceId = dsh-<pid>-<12hex>`锛屾瘡鏉℃寚浠ゅ甫 `eventId: crypto.randomUUID()`銆佽嚜澧?`seq`銆乣ts`锛沗sdkVersion` 鏍?`0.5.4`锛岃兘鍔涜ˉ鍒?7 椤瑰叏闆嗐€?
+- 杩愯鏈熻瘉鎹紙涓嶆槸璇绘簮鐮佹帹鏂級锛氱敤鏈€灏?Cordis 鍋囦笂涓嬫枃鐩撮┍鎻掍欢锛堟帰閽堣剼鏈斁 `.tmp`锛屼笉鍏ュ簱锛夛紝浼?`agent.session.header.cwd = <tmp>\proj-alpha` 鍚?`harness-session.json` 鍐欏叆 `cwd: <tmp>\proj-alpha`锛沗session/event` 鐨?`todo/write` 涓?`tools/execute` 鐨?`todo_write` 涓ゆ潯璺緞鍙戝嚭鐨?`todo_snapshot.cwd` 閮芥槸杩欎釜宸ヤ綔鍖猴紱v2 淇″皝 `hostInstanceId` 涓€娆″姞杞藉唴鎭掑畾銆乣eventId` 鍞竴銆乣seq` 鍗曡皟銆乣ts` 鍙В鏋愩€傚瓙杩涚▼渚у彟鐢ㄥ亣瀹夸富 CLI 楠岃瘉锛歚sendHostMessage` 鐪熺殑浠ヤ細璇濆伐浣滃尯浣滀负 `cwd` 鍚姩锛宍--session-id` 鍙栧埌鐧昏鍊硷紝浠诲姟浠?`-` 浠?stdin 璇汇€?
+- [DSH-ADAPT-D: 鍙嶅悜缁撹鈥斺€擿patchReload: "live"` 鏄棤鏁堝瓧娈礭 鍦ㄦ暣浠?`app.asar` 閲屾悳 `patchReload` **0 鍛戒腑**锛坄desktop-runtime.json` 鍙彁渚?`hostProtocolVersion`锛宍dsh-app-boot` 鍙 `dsh.bundle.patch`锛夈€傚疄娴嬫敼瀹屾彃浠舵簮鐮佸悗杩愯涓殑 DSH 蹇冭烦浠嶆槸 `PluginLoaded 0.5.3`锛宍harness-session.json` 缁х画琚棫浠ｇ爜鍐欏叆銆?*缁撹锛氭敼鎻掍欢婧愮爜蹇呴』閲嶅惎 DSH 鎵嶇敓鏁?*锛涙彃浠?`HANDOVER.md` 搂14.5 鏃╁墠閭ｇ増銆屽凡鏀寔鐑噸杞姐€嶅凡鍦ㄦ湰杞洿姝ｃ€?
+- [DSH-ADAPT-E: hooksDir 褰掑睘] `resolveRuntimePaths()` 閲?`runtimeDir = UTA_RUNTIME_DIR || dirname(endpointFile) || userData`锛屾墍浠ヨ繍琛屾椂鏄?`%APPDATA%\uta\hooks`锛涙祴璇曟妸 endpoint 鍐欏埌涓存椂鐩綍鏃?hooks 涔熻窡鐫€鍦ㄤ复鏃剁洰褰曘€傚啓娴嬭瘯鍒寜 `APPDATA` 鎵?`harness-session.json`锛屾湰杞湪杩欎釜鍧戦噷鐧借窇浜嗕竴杞帓鏌ャ€?
+- 楠屾敹锛氭彃浠?**114/114**锛堟柊澧?2 鏉?`[DSH-ADAPT: ...]` 鍥炲綊锛夛紝搴旂敤鍏ㄩ噺 **1016 椤癸紙1011 閫氳繃銆? 涓湡瀹?DS fixture 鏉′欢璺宠繃銆? 澶辫触锛?*锛宍npm run typecheck:node` 閫€鍑虹爜 0銆傛柊澧?app 娴嬭瘯鐢ㄥ亣瀹夸富 CLI 閿佷綇瀛愯繘绋?cwd锛涗袱鏉″彂閫佽妭娴侀棬锛堝悓瀹夸富 2.5s 杩炲彂銆佽褰曢渶 鈮?.5s 鍓嶏級鍦ㄦ祴璇曢噷鏄惧紡绛夊緟锛屼笉鏄斁瀹藉疄鐜般€?
+- 鐜板満鐘舵€侊細DSH 閫傞厤鏀瑰姩宸叉彁浜わ紱杩愯涓殑 DSH **浠嶆槸 0.5.3**锛堟湰杞病鏈夐噸鍚畠锛岄噸鍚細鎺愭柇姝ｅ湪瀵硅瘽鐨勪細璇濓級銆?
+- 寰呴獙璇侊紙閲嶅惎 DSH 鍚庣湅涓変欢浜嬶級锛氣憼 蹇冭烦/`hello` 鏄剧ず `0.5.4`锛涒憽 `%APPDATA%\uta\hooks\harness-session.json` 鐨?`cwd` 鍙樻垚鐪熷疄宸ヤ綔鍖猴紱鈶?妗屽疇鐩村彂娑堟伅鑳借繃 `assertAdoptable`銆傚彟澶栦粛闇€鎺掓煡 `%APPDATA%\uta\runtime-endpoint.json` 缂哄け锛圲ta 涓昏繘绋嬬枒浼兼病鍦ㄨ窇锛岀鍒扮鍙楅樆锛夛紝浠ュ強鏇存柊鎻掍欢 `README.md`锛堜粛鍋滃湪 10/24 鐨勯潰鍚戠敤鎴疯鏄庯級銆?
+- 涓嬩竴姝ュ缓璁細閲嶅惎 DSH 瀹屾垚涓婇潰涓夐」楠屾敹 鈫?琛?Uta 涓昏繘绋嬬鍒扮銆俁EADME 涓庣増鏈鏄庡凡鍦ㄦ湰娆℃彁浜ゆ洿鏂般€?
+
+## 鏈€鏂帮細2026-10-28 Claude Code 浠诲姟澧為噺闀滃儚
+
+- 鍩虹嚎 `ce1bc32`锛宮ain 寮€宸ュ共鍑€銆侰laude 鎻掍欢鐗堟湰 0.1.9锛屽競鍦烘瀯寤虹増鏈悓姝ワ紱鏈畨瑁呭埌鐪熷疄 Claude锛屼篃鏈浛鎹㈡棩甯?Uta銆?
+- `extractClaudeTaskDelta` 浠呮帴 Claude `PostToolUse` 涓旀湁浼氳瘽 ID 鐨?TaskCreate/TaskUpdate锛屼粠鎴愬姛鐨?tool_response 鑾峰彇浠诲姟 ID銆佹爣棰樹笌瀹為檯鐘舵€侊紱鍒犻櫎鐨?`updatedFields` 鏄?`deleted`銆傚け璐ャ€佹湭纭缁撴灉銆佺己澶?ID銆佽法瀹夸富鎴栨湭鍙戠敓鍙樺寲鐨勪簨浠朵笉鎶曢€掞紱淇濈暀鏃?TodoWrite 瀹屾暣蹇収璺緞銆?
+- `claude_task_delta` 缁?v2 淇″皝銆佺粦瀹氬涓讳笌闈炵┖浼氳瘽鏍￠獙鍒颁富杩涚▼銆俙todo-store` 鎸変細璇濆拰浠诲姟缂栧彿鍚堝苟骞跺湪 host-plans.v1.json 淇濈暀 ID锛涘吋瀹规棫璁板綍锛屼换鍔″垹闄や粎绉婚櫎瀵瑰簲椤癸紱鎺ュ埌鏈煡浠诲姟鐨勬洿鏂颁笉浼€犳爣棰樸€傛瀹犳诞绐楀拰璁剧疆椤垫爣娉ㄢ€滀粎鏄剧ず Uta 鎺ユ敹鍒扮殑浠诲姟锛屽彲鑳戒笉瀹屾暣鎴栨湁寤惰繜鈥濓紝涓嶄細鍥犱负涓€斿惎鍔?鏂嚎瀹ｇО瀹屾暣銆傚凡璁板綍鐨勯暅鍍忓彲璺?Uta 閲嶅惎锛屼絾涓嶄富鍔ㄥ洖璇?Claude 鐨勫畬鏁翠换鍔¤〃锛涘苟鍙戜贡搴忔垨绂荤嚎婕忎簨浠跺彲鑳介€犳垚閬楁紡鎴栨殏鏃惰繃鏈熴€?
+- 瀹氬悜娴嬭瘯瑕嗙洊鍗忚鏍￠獙銆佸垱寤?鏇存柊/鍒犻櫎銆侀噸澶嶅垱寤恒€佷細璇濋殧绂汇€佺己澶变簨浠躲€侀噸鍚鍙栥€佸け璐ョ粨鏋滐紱搴旂敤鍏ㄩ噺 1014 椤癸紙1009 閫氳繃銆? 鏉?DS fixture 璺宠繃锛夛紝鎻掍欢 112/112锛宯ode/web 绫诲瀷妫€鏌ュ強鏋勫缓閫氳繃銆?
+- 浠诲姟鍐呯嫭绔嬪畨瑁?Claude Code 2.1.312 鍒?`.tmp/claude-compat-20261028/cli-2.1.312`锛堟湭淇敼鏈満 2.1.138锛夛紱鐢ㄦ湰鍦版ā鎷?Anthropic API 璋冪敤鐪熷疄 TaskCreate/TaskUpdate锛岄噰闆嗗垱寤恒€佸畬鎴愩€佹敼鍚嶃€佸垹闄ゅ疄闄?PostToolUse銆傞殧绂?Uta profile `claude-task-fixture`锛岄€氳繃鐪熷疄 hook 鈫?杩愯妗?鈫?涓昏繘绋?鈫?瀛樺偍锛氬垱寤轰袱椤癸紝瀹屾垚骞舵敼鍚嶇涓€椤癸紝鍒犻櫎绗簩椤癸紝鏈€缁堟樉绀轰竴椤瑰凡瀹屾垚鍙婁笉瀹屾暣鎻愮ず锛涚湡瀹炴瀹犳诞绐楁埅鍥?`task-plan.png` 宸叉鏌ャ€俇ta 娴嬭瘯 PID 43292 宸查€€鍑猴紝鏈娇鐢ㄧ湡瀹?Claude 浼氳瘽銆佸瘑閽ユ垨鏃ュ父 profile銆?
+- 鏈獙璇佺湡瀹炶处鎴蜂氦浜掋€佹墍鏈夌増鏈強 Claude 浠诲姟鐘舵€佺殑鑷姩琛ュ叏锛涗换鍔″伐鍏峰湪閮ㄥ垎妯″瀷榛樿鍏抽棴锛屼笉搴旈潤榛樻敼鍙樼敤鎴烽厤缃€傛彃浠朵笌妗岄潰婧愮爜鍙樻洿閮介渶瑕侀厤濂楁洿鏂板悗鎵嶅湪鏃ュ父鐗堟湰鐢熸晥锛涙湭鎵撳寘鍙戝竷銆佹湭鍏ㄥ眬瀹夎銆俙.tmp/claude-compat-20261028` 鍚祴璇曠▼搴忓強绔偣鏁版嵁锛屼笉瑕佹彁浜ゆ暣涓洰褰曘€?
+
+## 鏈€鏂帮細2026-10-28 Claude Code 鏂扮増閫傞厤绗竴闃舵
+
+- 鍩虹嚎 `a265e59`锛宮ain 寮€宸ユ椂骞插噣銆傛湰鏈?Claude Code 2.1.138锛涘畼鏂规枃妗ｅ綋鍓嶅凡鍒楀嚭鏇撮珮鐗堟湰锛屾湭瀹夎鎴栭獙璇侀偅浜涚増鏈€傛彃浠剁増鏈粠 0.1.7 鍗囪嚦 0.1.8锛宮arketplace 澹版槑鍚屾锛涜姹?Claude Code >=2.1.78锛圫topFailure 浜嬩欢寮曞叆鐗堟湰锛夈€?
+- `hooks/hooks.json` 娉ㄥ唽 StopFailure锛沗uta-host-hook.mjs` 浠呭 Claude Code 鏄犲皠涓?`agent_state:error` 鍜屽浐瀹氱煭鏍囩锛屼笉浼?API 閿欒姝ｆ枃锛屼篃涓嶄吉鎶ュ畬鎴愶紱鐜版湁鏉冮檺瀹℃壒鐨勭绾垮洖閫€淇濇寔涓嶅彉銆?
+- 浣跨敤鐙珛 `.tmp/claude-compat-20261028` 涓瀯寤虹殑鎻掍欢銆乣CLAUDE_CONFIG_DIR`銆乁ta endpoint銆乴ocalhost 妯℃嫙 Anthropic API 涓庢ā鎷?Uta bridge锛屽疄闄呰繍琛屾湰鏈?Claude CLI锛氭敞鍐屽苟鍚戞ā鍨嬭姹傛毚闇?5 涓?MCP 宸ュ叿锛孲essionStart/UserPromptSubmit/Stop/SessionEnd 鍒拌揪锛涙ā鎷?HTTP 400 鏃朵骇鐢?StopFailure锛屽苟鎶曢€?error 鐘舵€侊紙鐭懡 CLI 鐨?SessionEnd 涔嬪悗浼氬洖 idle锛夈€傛湭璋冪敤鐪熷疄妯″瀷鎴栨棩甯搁厤缃€侰LI 鏍￠獙鏈€缁堟彃浠舵竻鍗曢€氳繃锛屾彃浠跺洖褰?111/111銆?
+- 鐪熷疄 401 妯℃嫙閬囧埌 CLI 閲嶈瘯骞跺湪 45 绉掕秴鏃剁粓姝紝鏈獙璇佽鍦烘櫙涓?StopFailure 鏃跺簭锛?00 妯℃嫙鎴愬姛銆傛湭瀹炴祴鐪熷疄鏉冮檺寮圭獥銆丮CP 宸ュ叿璋冪敤銆佺湡瀹炴瀹犵敾闈㈡垨鏂扮増 2.1.312锛屾湭閮ㄧ讲鎴栬鐩栧凡瀹夎鎻掍欢銆傛祴璇曟枃浠跺彲鑳藉惈绔偣鏁版嵁锛屽嬁鎻愪氦鏁寸洰褰曪紱娴嬭瘯鏈嶅姟鍜屽瓙杩涚▼宸查€€鍑恒€?
+- 灏氭湭瀹屾垚鏂扮増浠诲姟鍒楄〃閫傞厤锛氱幇鏈?`uta-todo.mjs` 鍙瘑鍒?TodoWrite 绛夋暣浠芥竻鍗曪紝TaskCreate/TaskUpdate 鏄閲忎笖闇€瑕佸叧鑱斿伐鍏风粨鏋滀腑鐨勪换鍔?ID锛涗笉鑳芥妸鍗曟鍒涘缓鐩存帴浣滀负鏁翠唤 `todo_snapshot`锛屽惁鍒欒鐩栧叾浠栦换鍔°€傚缓璁寜瀹夸富浼氳瘽闅旂杩借釜骞跺彧鍦ㄧ‘璁ゆ垚鍔熷悗鏇存柊锛屾槑纭己澶变簨浠躲€侀噸鍚?鎭㈠鏃跺浣曢伩鍏嶄吉閫犲畬鏁村垪琛紱閫氳繃鐪熷疄鎴栨ā鎷熸渶鏂扮増鏈姄鍙?hook 杞借嵎锛屽啀璁捐骞堕獙璇併€傛柊鐗堥儴鍒嗘ā鍨嬮粯璁や笉鍚敤杩欎簺宸ュ叿锛岀姝㈤潤榛樺己鍒舵敼鍙樼敤鎴峰涓婚厤缃€?
+
+## 鏈€鏂帮細2026-10-28 寰呭姙榛樿鏃ュ父涓庢棩甯稿彂閫佸涓?
+
+- 鍩虹嚎 `7ec731f`锛宮ain 寮€宸ュ共鍑€銆俙DeskpetStage` 鏅€氭墦寮€涓?`TodoBoard` 榛樿 lane 鍧囦负 daily锛屾爣绛鹃『搴忎负鏃ュ父銆佸涓伙紱鎻愰啋鍏ュ彛缁х画杩涘叆鏃ュ父銆傝缃〉鍘熷苟鍒楀竷灞€淇濇寔锛屽鐢ㄧ殑 `DailyTodoList` 涓ゅ鍧囨湁鍙戦€佸叆鍙ｃ€?
+- 鍙戦€佸墠鍕鹃€夋湭瀹屾垚椤瑰苟棰勮銆俙daily-todo-send.ts` 鍦ㄤ富杩涚▼鏍稿缁戝畾瀹夸富銆佸綋鍓嶅瓨鍌ㄤ笌棰勮鏃剁殑 id/鏂囨湰/鏈畬鎴愮姸鎬侊紝鎷掔粷閲嶅銆佸彉鍖栥€佹崯鍧忔暟鎹拰瓒呰繃 1000 瀛楃锛沗daily-send-to-host` 浣跨敤鐜版湁 `selectedHostSession` 鍜?`sendHostMessage`锛屼笉鎸夐」鐩?cwd 闄愬埗鏃ュ父寰呭姙銆倁nsupported 澶嶅埗娓呭崟锛屽叾浣欓敊璇樉绀猴紱鎴愬姛涓嶆洿鏀瑰緟鍔炪€?
+- 搴旂敤 1012 椤癸紙1007 閫氳繃銆? 璺宠繃锛夈€乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤洪€氳繃锛涙柊澧炴湇鍔℃祴璇曡鐩栭€夋嫨銆佸唴瀹?瀹夸富鍙樺寲銆侀暱搴︺€佹棤浼氳瘽鍜屽鍒跺洖閫€銆傞娆″叏閲忔祴璇曞洜 `model-migration.test.cjs` 鐨勯殧绂绘ā鍧楁竻鍗曠己鏂板渚濊禆鑰屽け璐ワ紝琛ュ厖 stub 鍚庨噸鏂伴€氳繃銆?
+- 鐙珛 Electron `daily-send-20261028`锛氭棩甯镐负榛樿锛屾爣绛炬棩甯?瀹夸富锛涗袱椤归瑙堝彲鍙栨秷涓€椤癸紝棰勮鍚庝慨鏀瑰唴瀹硅鎷掞紝鏃犱細璇濇彁绀猴紝寰呭姙浠?pending锛涜缃〉鏃ュ父鏍忎篃鏈夊彂閫佸叆鍙ｃ€侾ID 35232銆?6728 宸查€€鍑猴紱鏃ュ父 profile 鏈搷浣溿€傚悎鎴愭祴璇曡瘉鎹湪 `.tmp/daily-send-20261028/` 涓?`.tmp/daily-send-final-20261028/`锛屼笉瑕佷笂浼犲惈绔偣鏁版嵁鐨勭洰褰曘€?
+- 鏈悜鐪熷疄瀹夸富鍒涘缓浠诲姟锛涘鍒跺垎鏀敱鑷姩娴嬭瘯娉ㄥ叆楠岃瘉锛屾湭瑕嗙洊鐪熷疄绯荤粺鍓创鏉匡紱鏈墦鍖呮垨鏇存柊鏃ュ父杩愯鐗堟湰銆?
+
+## 鏈€鏂帮細2026-10-28 鎻愰啋璺ㄥ崍澶滀笌涓撴敞寰呮満淇
+
+- 鍩虹嚎 `48f7b5f`锛宮ain 寮€宸ユ椂骞插噣銆俙isDailyReminderDue` 鍦ㄩ涓彁閱掗敋鐐逛箣鍚庝紭鍏堝鐞?snooze锛岄伩鍏嶆鏃ユ甯告椂闂磋鐩栨帹杩熺洰鏍囷紱宸叉彁閱掓垨鎺ㄨ繜鐨勬湭瀹屾垚椤硅法鏃ヤ繚鐣欐湭澶勭悊瑙掓爣銆備簨浠?`dueAt` 浼樺厛浣跨敤瀹為檯鎺ㄨ繜鐩爣锛屽畬鎴?缂栬緫鍘熸彁閱掍粛娓呴櫎 snooze銆?
+- `selectAmbientPerformanceState` 鎺ュ叆 `focusActive`锛屽湪 idle 鏃惰繑鍥?null锛涘鎵广€佸伐浣溿€佽璇濈瓑鍏朵粬鐘舵€佷粛閬靛惊鍘熶紭鍏堢骇銆傛ā鍨嬪師鐢熷懠鍚?鐪ㄧ溂涓庣墿鐞嗕笉鐢辨鏆傚仠銆?
+- 瀹氬悜娴嬭瘯 28/28锛涘簲鐢ㄥ叏閲?1010 椤癸紙1005 閫氳繃銆? 涓湡瀹?DS fixture 鏉′欢璺宠繃锛夛紱node/web 绫诲瀷妫€鏌ュ拰鏋勫缓閫氳繃銆傝鐩栬法鍗堝銆侀噸杞姐€佹渶闀?1440 鍒嗛挓銆侀娆℃彁閱掓椂闂淬€佸畬鎴愩€佹瘡鏃ラ噸缃拰淇敼鎻愰啋銆傝法鍗堝浣跨敤鍥哄畾鏃堕挓锛屾湭鏀圭郴缁熸椂闂淬€?
+- 闅旂 profile `fix-two-20261028` 鐨勭湡瀹?Electron + Hiyori锛氳繘鍏ヤ笓娉ㄥ墠 ambient `idle` 涓旀湁澶撮儴闄勫姞鍊硷紝杩涘叆鍚?state/head 鍧囦负 null锛涘緟鍔炴柊澧炩啋鎺ㄨ繜鈫掑畬鎴愮殑鏈鐞嗘暟閲?1鈫?鈫?銆侾ID 33688 宸查€€鍑猴紝鏃ュ父 profile 鏈搷浣溿€俙.tmp/fix-two-20261028/` 鐣欐湁鍚堟垚璇佹嵁鍙婂彲鑳藉惈浠ょ墝鐨勭鐐规暟鎹紝涓嶈鎻愪氦鎴栧垎浜暣鐩綍銆?
+- 灏氭湭鍦ㄧ湡瀹炲崍澶滅瓑寰呰Е鍙戙€佹湭鍋氫汉宸ュ姩浣滆鎰熷拰鐪熷疄瀹夸富鍦烘櫙楠屾敹锛涙湭鎵撳寘鎴栨洿鏂版棩甯哥増鏈€備笅鏂硅瘎浼颁繚鐣欏師濮嬪彂鐜颁綔涓哄巻鍙茶褰曪紝鏈妭璇存槑淇鐘舵€併€?
+
+## 鏈€鏂帮細2026-10-28 鍏ㄩ」鐩彧璇讳笟鍔″鏌?
+
+- 婧愮爜鍩虹嚎 `9196137133d847ec21dc46ddc78b5fc8203a9169`锛宍main`锛屽紑宸ュ伐浣滃尯骞插噣銆傛湰杞彧鏂板 [鍏ㄩ」鐩瘎浼癩(../validation/project-assessment-2026-10-28.md) 骞舵洿鏂颁氦鎺ワ紝鏈慨涓氬姟浠ｇ爜銆?
+- 鐢ㄦ埛鏈€鏂颁骇鍝佽竟鐣岃鐩栧巻鍙茶褰曪細姣忓彧妗屽疇閫夋嫨涓€涓涓伙紝瑙掕壊涓€?璁板繂/瀵硅瘽鍐崇瓥灞炲涓昏亴璐ｃ€備笉瑕侀噸鏂板缓璁法瀹夸富澶?Agent 鍏辩敤鎴栨闈汉鏍肩郴缁燂紱鐜版湁鍚屽涓?session 閫夋嫨鏄彟涓€灞傚疄鐜颁簨瀹炪€?
+- **[P2锛氭瘡鏃ユ彁閱掕法鍗堝鎺ㄨ繜澶辨晥]**锛歚daily-todo-store.ts:74-78` 鍏堟寜浠婂ぉ HH:mm 鎷︽埅锛屽啀鐪?snooze锛?3:55 + 10 鍒嗛挓鍒版鏃?00:05 寰楀埌 `due=false`锛宍unhandledDailyReminderIds` 鍚屾椂涓虹┖銆傚浐瀹氭椂闂存ā鍧楀鐜板凡淇濆瓨锛涢渶缁熶竴鎺ㄨ繜瀹炰緥鍜岃鏍囪鍒欙紝灏氭湭淇銆?
+- **[P2锛氫笓娉ㄦā寮忛仐婕忔寔缁緟鏈哄井鍔ㄤ綔]**锛歚DeskpetStage.vue:641-655` 鐨?ambient 杈撳叆鏈粨鍚?`focusActive`锛涢殧绂?Hiyori 涓?focus=true 鍚庝粛 state=idle銆乻uspended=false锛屽瓨鍦ㄩ檮鍔犲ご閮ㄩ噺銆傞殢鏈哄緟鏈恒€侀潤鎬佸緟鏈轰笌 TTS 宸查棬鎺э紝涓嶅簲璇啓鎴愬叏閮ㄤ笓娉ㄦ棤鏁堛€?
+- 瀹屾暣娴嬭瘯閲嶈窇锛氬簲鐢?1007锛?002 閫氳繃銆? 涓湡瀹?DS fixture 鏉′欢璺宠繃锛夈€佹彃浠?110/110銆丮aiBot unittest 17/17銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤洪€氳繃銆傚崟娆″綋鍓嶆祴璇曢€氳繃鏈鐩栦笂杩颁袱涓竟鐣岋紝涓嶈兘鎹鍚﹁澶嶇幇銆?
+- 闅旂 profile `project-audit-20261028` 楠岃瘉 v2 闈炵粦瀹氬涓?403銆佺粦瀹氬涓?200銆佸緟鍔炲/鎺ㄨ繜/瀹屾垚 IPC銆丠iyori 妯″瀷妫€鏌ュ強璁剧疆绐楀彛锛涙湭鍚戠湡瀹炲涓诲彂浠诲姟锛屾湭鐢ㄦ棩甯搁厤缃?瀵嗛挜/璇煶鏈嶅姟銆侾ID 26816銆?6416 宸查€€鍑猴紝绔彛 65268/65270 宸插叧闂€傛祴璇曡瘉鎹暀鍦?`.tmp/project-audit-20261028/`锛屾暣鐩綍涓嶈鎻愪氦鎴栧垎浜紙绔偣鍙兘鍚护鐗岋級銆?
+- 鍏朵粬杈圭晫锛氬叕寮€杩佺Щ鍖呮湭鍖呮嫭浜掑姩/甯х巼绛?localStorage 鍋忓ソ锛屾秷鎭彧瀵煎嚭涓嶆仮澶嶏紱妯″瀷鎺ュ叆浠嶄互鐩綍涓庢墜宸ユ牎鍑嗕负涓伙紱鏂囨。鐨?MCP 鏁伴噺銆佸弽鍚戣緭鍏ャ€佺郴缁熻闊冲拰 RP 閰嶇疆鏉ユ簮鏈夎繃鏈熸弿杩般€傛棫 `media` 鍗犱綅娌℃湁鐢熶骇璋冪敤锛屼笉鑳借鍒ょ湡瀹?STT/TTS 缂哄け銆?
+- 鏈獙鏀剁湡瀹炲悇瀹夸富/闊抽銆佸妯″瀷瑙傛劅銆佸灞?鐫＄湢/闀挎椂璧勬簮涓庢崲鏈烘仮澶嶏紱鏈墦鍖呫€俛lpha.18 manifest 浠嶅搴?`69758f3` / 2026-10-26锛屼笉鑳藉綋鎴愬綋鍓嶆簮鐮佺増鏈€傚缓璁厛淇袱涓鐜帮紝鍐嶆暣鐞嗚縼绉?鑳藉姏鏂囨。涓庣湡瀹炲満鏅獙鏀讹紱姝ゅ缓璁笉鏄凡鑾锋柊鍔熻兘瀹炴柦鎺堟潈銆?
+
+## 鏈€鏂帮細2026-10-28 妗屽疇浜掑姩銆佹秷鎭瓫閫夈€佷笓娉ㄥ拰寰呭姙鎭㈠
+
+- `interaction-policy.ts` 缁熶竴闄愬埗浜掑姩鍐峰嵈鍜屼换鍔?瀹℃壒/鎾姤/棰勮/娴眰鏈熼棿鐨勬姠鍗狅紱鑸炲彴鍗曞嚮鍦ㄦ槑纭懡涓?head/face 鏃堕€夊紑蹇冿紝鍚﹀垯閫氱敤鍥炲簲锛涢潤鎬佺珛缁樹娇鐢ㄥ瓨鍦ㄧ殑宸垎锛屾嫋鍔ㄦ斁涓嬩笌 8 绉掓偓鍋滃叡鐢ㄩ棬鎺э紝绌块€忓強涓撴敞涓嬬殑琚姩鎮仠涓嶈Е鍙戙€傜偣鍑讳簰鍔ㄥ亸濂芥殏瀛樺綋鍓?profile 鐨?renderer localStorage锛屼笉灞炰簬鍏紑璁剧疆杩佺Щ鍖呫€?
+- `useModelDrag` 鍜?`StaticStage` 鍒嗗埆澶勭悊鎷栧姩閲婃斁銆乥lur 涓庡嵏杞芥竻鐞嗭紱闈欐€佺珛缁樻毚闇插疄闄?figure 鐭╁舰鍜?tap 鐘舵€併€傚弻鍑昏緭鍏ャ€佸彸閿惊鐜〃鎯呬繚鐣欍€?
+- 娑堟伅璁板綍鎸夌湡瀹?host/session 缁勫悎绛涢€夈€佺瓫閫夊彂閫佸け璐ュ苟鏄剧ず鏃堕棿锛涗笉鎺ㄦ祴缂哄け鐨勯」鐩垨浼氳瘽锛屼笉鏇存敼鍏变韩妗屽疇琛屼负銆傚揩鎹烽潰鏉跨殑 30 鍒嗛挓涓撴敞鏆傚仠寰呮満銆佽В璇村拰 TTS锛岃繘鍏ユ椂鍙栨秷鍦ㄦ挱璇煶锛涙彁閱掑拰瀹℃壒鐓у父銆傝鏃朵繚瀛樺湪褰撳墠 profile 鐨?renderer localStorage銆?
+- `todo-recovery.ts` 闄愬畾椤圭洰/鏃ュ父鏂囦欢锛岄妫€鏉ユ簮鍜岀洰鏍囩増鏈€佹寜 SHA-256 妫€鏌ョ洰鏍囨湭鍙樺寲锛岀‘璁ゆ仮澶嶅墠浠ョ嫭绔嬫枃浠朵繚鐣欏師濮嬪瓧鑺傦紱鎹熷潖鍘熸枃浠跺彲鍗曠嫭瀵煎嚭锛屾渶澶?8 MiB銆傛仮澶嶅悗閲嶈浇 store 骞堕€氱煡涓や釜绐楀彛锛涜亰澶╄褰曠洰鍓嶄粛鍙敮鎸佺嫭绔嬪鍑猴紝涓嶆敮鎸佸湪姝ゅ叆鍙ｆ仮澶嶃€傛暟鎹鍑轰笉鍏佽閫夋嫨褰撳墠 profile 鍐呯殑鏂囦欢銆?
+- 楠岃瘉锛氬簲鐢?1002 閫氳繃銆? 璺宠繃锛涙彃浠?110/110锛沶ode/web 绫诲瀷妫€鏌ュ強鏋勫缓閫氳繃銆傞殧绂?Electron `companion-resume`銆佺鍙?9329锛欻iyori 鍗曞嚮銆侀潤鎬佺珛缁樻嫋鍔ㄥ悗鍥炲簲鍙婂紑蹇冨樊鍒嗐€佽缃獥鍙ｆ仮澶嶆棩甯稿緟鍔炲苟鏇存柊妗屽疇鍒楄〃銆備笂杞殧绂诲疄渚嬭繕楠岃瘉娑堟伅澶辫触绛涢€変笌涓撴敞寮€鍏炽€侾ID 29044 宸插仠姝紝涓や釜闅旂娴嬭瘯鐩綍鐣欏湪 `.tmp`锛屽寘鍚悎鎴愭暟鎹€傜敤鎴锋棩甯?profile 鏈搷浣溿€?
+- 杈圭晫锛氱湡瀹為紶鏍囬暱鎮仠銆佽嚜鐒跺姩浣滆鎰熴€佸畬鏁村満鏅剼鏈€佺湡瀹炲涓诲彂閫佹帴鏀躲€佺郴缁熸枃浠堕€夋嫨瀵硅瘽妗嗗拰鐪熷疄鏈嶅姟璇煶灏氭湭楠屾敹锛涙湭鎵撳寘銆傝缃€佸姩浣滃強鏍″噯宸叉湁鐙珛杩佺Щ鍏ュ彛锛屾ā鍨嬫枃浠躲€佽繛鎺ュ瘑閽ュ拰娑堟伅鎭㈠涓嶅湪鏂板寰呭姙鎭㈠鑼冨洿銆?
+
+## 鏈€鏂帮細2026-10-28 寮€鍙戝疄渚嬫仮澶嶅叏灞€蹇嵎閿?
+
+- **鍘熷洜**锛歚registerGlobalShortcuts` 鑷?`a40ba10`锛?026-10-22锛夎捣瀵归潪 stable 鐩存帴 `return`锛屾墍浠?`npm run dev` 浠庝笉娉ㄥ唽鍏ㄥ眬蹇嵎閿紱浣嗘墭鐩?璁剧疆鍙堝彧鍦ㄦ敞鍐屾垚鍔熸椂鎵嶆樉绀猴紝缁撴灉灏辨槸鈥滃揩鎹烽敭娌′簡鈥濄€?
+- **淇**锛歴table 鐓ф棫锛涢潪 stable 鍏堟壂鎻?`%APPDATA%/uta/runtime-endpoint.json` 涓?`host-pets/*/runtime-endpoint.json`锛岃嫢鏈夊彟涓€涓瓨娲?PID 鐨勫疄渚嬪氨璺宠繃锛坄main/shortcut-scope.ts` 鐨?`findForeignLiveEndpoint`锛岀函鍑芥暟锛岄厤 `shortcut-scope.test.cjs`锛夛紝鍚﹀垯姝ｅ父娉ㄥ唽銆傛墭鐩樹笌璁剧疆鐨勨€滄槸鍚︽樉绀洪敭鈥濅粠 `environment.isStable && isRegistered` 鏀逛负鍙湅 `isRegistered`锛涜闊抽敭鍊欓€夊洖閫€涓?`voiceShortcut` IPC 涓嶅彉銆俙SttSettingsSection` 鏃犻敭鏂囨鏀逛负鈥滃彲鑳借鍏朵粬绋嬪簭鎴栧彟涓€涓?Uta 鍗犵敤鈥濄€?
+- **鏈満瀹炴祴**锛歚Ctrl+Alt+V` 娉ㄥ唽澶辫触锛堣鍏朵粬绋嬪簭鍗犵敤锛夛紝鎸夋棦鏈夊€欓€夊洖閫€鍒?`CommandOrControl+Alt+Space`锛涢殧绂诲疄渚嬬殑璁剧疆椤垫樉绀衡€滆闊宠緭鍏ュ揩鎹烽敭锛欳trl+Alt+Space鈥濄€?
+- 楠岃瘉锛氬簲鐢?**1015锛?010 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*銆佹彃浠?**110/110**銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤洪€氳繃銆傛祴璇曞疄渚嬩笌 profile 宸叉竻鐞嗭紱鏈墦鍖呫€?
+- **杈圭晫**锛氱郴缁熺儹閿槸鍏ㄥ眬鐨勨€斺€旀棩甯哥ǔ瀹氬疄渚嬪凡缁忓湪璺戞椂寮€鍙戝疄渚嬭璺紱寮€鍙戝疄渚嬪厛鍚姩鏃讹紝鏃ュ父瀹炰緥浼氭敞鍐屽け璐ワ紙涓庝换浣曚袱涓姠鍚屼竴鐑敭鐨勭▼搴忎竴鏍凤級銆?
+
+## 鏈€鏂帮細2026-10-27 鏃ュ父鎻愰啋闂幆
+
+- **鏁版嵁**锛歚DailyTodoItem` 鏂板 `resetDaily?`锛堟瘡澶╅噸澶嶇殑娆℃棩閲嶇疆锛岄粯璁ゅ叧闂級涓?`snoozedUntil?`锛沗DailyTodoState` 鏂板 `unhandledIds`銆俙currentOccurrence()` 鏄?鏈疆鎻愰啋鏃堕棿"鐨勫敮涓€鏉ユ簮锛坉aily 鍙栦粖澶?HH:mm锛屼笖涓嶆棭浜?`remindAt`锛夛紱`isDailyReminderDue` 鍏堢湅 snooze锛坄lastRemindedAt < snoozedUntil` 鎵嶅啀瑙﹀彂锛夛紝`markReminded` 瑙﹀彂鍚庢竻 `snoozedUntil`銆俙shouldResetDailyItem` 鐢?瀹屾垚鏃?< 鏈疆鍙戠敓鏃?鍒ゅ畾锛屾墍浠ュ悓涓€澶╂彁鍓嶅畬鎴愪笉浼氬湪褰撳ぉ鎻愰啋鏃堕棿琚炕鍥炴湭瀹屾垚锛沗applyDailyRecurrence()` 鍦ㄦ瘡娆?tick 鏈€鍓嶉潰鎵ц锛堟棭浜?runtime 灏辩华闂ㄧ锛夛紝鍚姩鍗宠ˉ锛沗clearCompleted` 淇濈暀 resetDaily 鏉＄洰銆?
+- **IPC/preload**锛氭柊澧?`daily-snooze-item`锛?..1440 鍒嗛挓锛孶I 鍥哄畾 10锛夛紱`daily-add-item`/`daily-update-item` 鎺ュ彈 `resetDaily`锛沗env.d.ts` 鍚屾銆俙model-migration.test.cjs` 鐨?store stub 琛?`snoozeItem`/`applyDailyRecurrence`/`currentOccurrence` 涓?`unhandledIds`銆?
+- **璋冨害**锛歚tickDailyReminders` 鍏堣窇 `applyDailyRecurrence()` 骞舵寜闇€骞挎挱锛屽啀璧板師鏉ョ殑 reminded 娴佺▼锛沗daily-reminder-due` 鐨?`dueAt` 鏀逛负 `currentOccurrence()`銆?
+- **妗屽疇**锛歚DeskpetStage` 鏂板 `reminder-card`锛堟爣棰?浜嬮」鍚嶏紱澶氭潯=鈥滄湁 N 浠垛€︹€濓紱鎸夐挳锛氬畬鎴?10 鍒嗛挓鍚?鎵撳紑寰呭姙/脳锛夛紝30s 鑷姩鏀惰捣锛沗completeReminder` 鍙鍗曟潯鐢熸晥锛堝鏉′笉缁欎竴閿叏瀹屾垚锛夛紝`snoozeReminder` 瀵瑰崱鐗囧唴姣忔潯鍚勬帹杩?10 鍒嗛挓锛涘緟鍔炴寜閽鏍囩敤 `useDailyState().unhandledIds`锛涒€滄墦寮€寰呭姙鈥濇妸 `TodoBoard.initialLane` 璁句负 `daily`銆傚疇鐗╂皵娉′繚鐣欏師鍙ワ紝鍗＄墖鍙樉绀轰簨椤癸紝閬垮厤閲嶅銆?
+- **鍒楄〃**锛歚DailyTodoList` 琛岀粨鏋勬敼涓衡€滃嬀閫?+ 姝ｆ枃/鐘舵€佷袱琛?+ 鎿嶄綔鈥濓紝绐勬诞绐椾笉鍐嶆妸鏂囧瓧鎸ゆ垚涓€瀛椾竴琛岋紱鍒扮偣椤规湁 `daily-todo-due` 鏍囪 + 鈥滅◢鍚庘€濓紝snooze 涓樉绀衡€滃凡鎺ㄨ繜鍒?HH:mm鈥濓紱鎻愰啋缂栬緫鍣ㄤ笌鏂板缓琛ㄥ崟鍦ㄢ€滄瘡澶╄繖涓椂闂粹€濅笅鍑虹幇鈥滅浜屽ぉ閲嶆柊鍑虹幇鈥濄€俙TodoDomain` 鏃ュ父鏍忓ご閮ㄦ樉绀衡€淣 浠跺埌鐐光€濄€?
+- **楠岃瘉**锛氬簲鐢?**1003锛?98 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*銆佹彃浠?**110/110**銆乶ode/web 绫诲瀷妫€鏌ャ€乣electron-vite build` 閫氳繃銆傞殧绂?profile `ui-reminder-20261027` + CDP 9231 鐪熷疄璺戦€氾細璁剧疆椤垫柊寤猴紙姣忓ぉ + 绗簩澶╅噸鏂板嚭鐜帮級鈫?鍒扮偣鍗＄墖锛坄璇ュ仛銆屸€︺€嶄簡` + 鍗＄墖锛夆啋 瀹屾垚锛堣鏍?2鈫?銆佺姸鎬佸啓鍥烇級鈫?绋嶅悗锛坄snoozedUntil` 鍐欏叆銆佸垪琛ㄦ樉绀衡€滃凡鎺ㄨ繜鍒?22:33鈥濓級鈫?鎵撳紑寰呭姙钀藉埌鏃ュ父鏍忥紱鎶婅鏉℃敼鎴愭槰澶╁畬鎴愬悗閲嶅惎锛屽惎鍔ㄥ嵆鍥炲埌鏈畬鎴愬苟鍐嶆鎻愰啋锛坄completedAt` 娓呯┖銆乣resetDaily` 淇濈暀锛夈€傛埅鍥?`docs/validation/screenshots-reminder-20261027/`銆?
+- **鐜板満**锛氭祴璇曞疄渚嬪凡鍋滄銆乸rofile 宸插垹闄わ紱鏃ュ父瀹炰緥涓?5173 鏈姩锛涙湭鎵撳寘銆?
+- **杈圭晫**锛氣€滅◢鍚庘€濆浐瀹?10 鍒嗛挓锛涙棤绯荤粺閫氱煡/璐潯寰幆/寮€鏈鸿嚜鍚紱鈥滃埌鐐规湭澶勭悊鈥濇寜鈥滃凡鍒扮偣涓旀湭瀹屾垚鈥濇帹瀵硷紝鎺ㄨ繜涓粛璁″叆銆?
+
+## 鏈€鏂帮細2026-10-27 寰呭姙瀹℃煡闂淇
+
+- `todo-store` 鍐欏叆鍓嶆牎楠屽畬鏁存枃妗ｏ紱椤圭洰鏍囩闄愬埗 120 瀛楃锛岃秴杩?200 椤圭殑鍏宠仈鎷掔粷涓斾笉鍔ㄥ師鏂囦欢銆傛寜鐩綍鎴栧涓绘坊鍔犳椂澶嶇敤宸插瓨鍦ㄩ」鐩€?
+- `todo-session` 鍙湪瀹夸富鍜屼細璇?ID 涓€鑷翠笖璁板綍鏂伴矞鏃惰ˉ鍏ㄧ洰褰曪紱鍙戦€佸緟鍔炴椂鍥哄畾瀹為檯鐩爣浼氳瘽骞跺尮閰嶉」鐩洰褰曪紝鏈煡鎴栦笉涓€鑷存椂闃绘鍙戦€併€備笉鏀寔鐩村彂鐨勫钩鍙颁繚鐣欏鍒跺洖閫€銆?
+- 鏃ュ父閲嶅鎻愰啋浠ラ娆℃彁閱掓椂闂翠负涓嬮檺锛涗慨鏀规枃瀛楁垨瀹屾垚鐘舵€佷笉閲嶆帓鎻愰啋鏃堕棿銆傛棩甯告枃浠舵崯鍧忔垨鐗堟湰杩囬珮鏃?UI 鏄庣‘鎻愮ず骞剁鐢ㄥ啓鍏ワ紝鍘熸枃浠朵笉瑕嗙洊銆?
+- 楠岃瘉锛氬簲鐢?993 閫氳繃銆? 璺宠繃锛涙彃浠?110/110锛沶ode/web 绫诲瀷妫€鏌ュ強鏋勫缓閫氳繃銆傞殧绂?profile `todo-review-fix` 楠岃瘉璺ㄩ」鐩彂閫佽 IPC 鎷掔粷銆佹崯鍧忔棩甯告枃浠舵彁绀哄彲瑙佷笖鍘熸枃浠朵笉鍙橈紱娴嬭瘯 PID 29644 宸插仠姝€傚皻鏈獙璇佺湡瀹炲涓绘帴鏀躲€佷汉宸ュ０闊虫垨鎵撳寘鐗堛€?
+- 鑷姩瀹℃壒鎷︽埅浜嗗垹闄?`.tmp/todo-review-fix-20261027` 鐨勬搷浣滐紱鐩綍淇濈暀鏈疆鍚堟垚鐨勯殧绂绘祴璇曟暟鎹紝娌℃湁鏃ュ父 profile 鏁版嵁銆?
+- 宸茬粡鐢辨棫鐗堟湰鍐欏嚭涓嶇鍚堣鍒欑殑寰呭姙鏂囦欢涓嶄細琚嚜鍔ㄤ慨鏀癸紱鑻ラ亣鍒版棫鏂囦欢涓嶅彲璇伙紝闇€鍏堜繚鐣欏師鏂囦欢鍐嶅崟鐙鐞嗘仮澶嶃€?
+
+## 鏈€鏂帮細2026-10-27 寰呭姙"娣诲姞澶辫触"淇锛氭妸涓嶅彲鐢ㄥ師鍥犺鐪熻瘽
+
+- **璇婃柇锛堢敤鎴锋姤"寰呭姙娣诲姞澶辫触"锛?*锛氬叾寮€鍙戝疄渚?Electron 涓昏繘绋?12:53:15 鍚姩锛堣繘绋?CreationDate锛沗%APPDATA%/uta-development/dev-f7e444bba875` 鐨?DevToolsActivePort/Preferences 鏃堕棿鎴充竴鑷达級锛屽緟鍔?IPC 鍦?14:59锛坄9374c0c`锛?16:08锛坄3e6a882`锛夋墠鎻愪氦锛涙覆鏌撳眰缁?5173 Vite 鐑洿鏂板凡鏄柊 UI锛宲reload/涓昏繘绋嬩粛鏄棫鐨勶紝`window.utaAPI.todoAddItem` 涓嶅瓨鍦?鈫?鍙€夎皟鐢ㄨ繑鍥?`undefined` 鈫?鐣岄潰鎵?寰呭姙娣诲姞澶辫触銆?銆傝 profile 娌℃湁 `todo.v1.json`/`daily-todos.v1.json`锛岃瘉鏄庤姹備粠鏈埌杈惧瓨鍌ㄣ€?*鐢ㄦ埛渚у姩浣滐細瀹屽叏閫€鍑哄悗閲嶈窇 `npm run dev`銆?* 鏈疆浠ｇ爜淇殑鏄?澶辫触淇℃伅涓嶈鐪熻瘽"銆?
+- **鏂板 `app/src/renderer/services/todo-availability.ts`**锛歚hasTodoIpc()/hasDailyIpc()` 妫€鏌?preload 琛ㄩ潰锛坄getTodoState+todoAddItem` / `getDailyState+dailyAddItem`锛夛紱`OUTDATED_MAIN_MESSAGE`锛堜富绋嬪簭姣旂晫闈㈡棫锛岃瀹屽叏閫€鍑洪噸鍚級涓?`NO_PLATFORM_MESSAGE`锛堟湭缁戝畾骞冲彴锛岄」鐩緟鍔炵敤涓嶄簡锛屽幓"鏃ュ父"鏍忥級銆?
+- **`useTodoState`/`useDailyState` 鏂板 `available`**锛氭帴鍙ｇ己澶辨椂 `error=OUTDATED_MAIN_MESSAGE`銆乣state=null`銆佷笉鍐嶈"寰呭姙鐘舵€佷笉鍙敤銆?锛涚獥鍙ｈ仛鐒﹀埛鏂颁細閲嶆柊鍒ゅ畾銆?
+- **闂ㄦ帶**锛歚TodoBoard.canEdit`銆乣DailyTodoList.canEdit`銆乣TodoDomain.canEditSelected` 骞跺叆 `available`锛涘涓绘爮鍐嶅苟鍏?`noPlatform`锛坄!!state && !state.activeHostId`锛夛紝`TodoBoard.messageText` 鏃犻敊璇椂鍥炶惤鍒?`NO_PLATFORM_MESSAGE`锛宍TodoDomain` 澧炲姞 `settings-note is-warning` 璇存槑鏉°€備慨澶嶅墠鏈粦瀹氬钩鍙版椂瀹夸富鏍忔坊鍔犳鍙偣銆佹彁浜ゅ彧寰楀埌"鏃犳硶纭畾寰呭姙鎵€灞為」鐩€?锛堢湡瀹炵獥鍙ｅ鐜拌繃锛夈€?
+- **楠岃瘉**锛氬簲鐢?**994锛?89 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*銆佹彃浠?**110/110**銆乶ode/web 绫诲瀷妫€鏌ャ€乣electron-vite build` 閫氳繃銆傜湡瀹為殧绂?profile `ui-fix-20261027` + CDP 9231锛歚bindPetHost('harness')` 鍚庢瀹犳诞绐楀涓绘爮/鏃ュ父鏍忎笌璁剧疆椤典袱鏍忓潎鐪熷疄娣诲姞鎴愬姛骞惰惤鐩?`todo.v1.json`/`daily-todos.v1.json`锛堣法绐楀彛涓€鑷达級锛涙湭缁戝畾涓?`unbindPetHost()` 鍚庡涓绘爮杈撳叆绂佺敤骞舵樉绀?`NO_PLATFORM_MESSAGE`銆佹棩甯告爮浠嶅彲鐢紝鎴浘 `docs/validation/screenshots-todo-fix-20261027/settings-unbound-guidance.png`銆俙todo-ui.test.cjs` 鐢ㄦ々 `window` 鍔熻兘楠岃瘉浜?`available=false` 鏃朵袱涓?composable 鐨?`error` 鏂囨锛涚湡瀹炵獥鍙ｆ棤娉曟妸 contextBridge 鏆撮湶鐨?`utaAPI` 鍙樻棫锛堝睘鎬т笉鍙厤缃€佷笉鍙垹銆乣window.utaAPI` 涓嶅彲閲嶅畾涔夛級锛屾晠"涓荤▼搴忚繃鏃?鎻愮ず鏈仛鐪熷疄绐楀彛澶嶇幇銆?
+- **鐜板満**锛氱敤鎴?12:53 鐨勫紑鍙戝疄渚嬫湭瑙︾锛堜粛闇€鍏惰嚜琛岄噸鍚級锛?173 鏈仠锛涙祴璇曞疄渚嬪凡鍋滄銆乣ui-fix-20261027` profile 宸插垹闄わ紱stable 鏁版嵁鏈姩銆傛湭鎵撳寘銆?
+
+## 鏈€鏂帮細2026-10-27 寰呭姙涓ゆ爮鍖栦笌鏃ュ父鎻愰啋
+
+- **鏁版嵁**锛氭柊澧?`app/src/shared/daily-todo-contracts.ts`銆乣app/src/main/daily-todo-store.ts`銆傛棩甯稿緟鍔炵嫭绔嬪瓨 `daily-todos.v1.json`锛坕tems + `reminderSound`锛夛紝涓?`todo.v1.json`锛堥」鐩?瀹夸富鏍忥級瀹屽叏鍒嗗紑锛涙崯鍧?fail-closed銆乤tomic 鍐欏叆銆俙remindAt`/`repeat:'none'|'daily'`/`lastRemindedAt` 閮藉湪鏃ュ父椤逛笂锛涙瘡澶╅噸澶嶄繚瀛樻椂鐢?`normalizeDailyAnchor` 褰掍竴鍒颁笅涓€娆″彂鐢燂紝閬垮厤璁句簡杩囧幓鐨勪粖澶╂椂闂村氨绔嬪埢鍝嶃€?
+- **璋冨害**锛歚dueDailyReminders()` 鏄函鍑芥暟锛堜竴娆℃€у彧鍝嶄竴娆°€佹瘡澶╂寜 HH:mm 鍒ゅ畾銆佸畬鎴愰」璺宠繃銆乣lastRemindedAt < dueAt` 鍘婚噸锛夛紱涓昏繘绋?`tickDailyReminders` 姣?30 绉掕窇涓€娆★紝瑕佹眰 `runtimeCommandReady` 涓?pet 绐楀彛瀛樺湪锛涜Е鍙戝悗 `markReminded`銆佸箍鎾?`daily-changed`銆佸悜 pet 鍙?`daily-reminder-due`锛坕tems + sound锛夛紝骞惰皟鐢ㄦ棦鏈?`summonPetWindow()`锛坄showInactive`锛屼笉鎶㈢劍鐐癸級銆俙before-quit` 娓呯悊璁℃椂鍣ㄣ€?
+- **IPC/preload**锛歚daily-get-state`銆乣daily-add-item`銆乣daily-update-item`銆乣daily-delete-item`銆乣daily-clear-completed`銆乣daily-set-reminder-sound`銆乣onDailyChanged`銆乣onDailyReminder`锛沗env.d.ts` 宸茶ˉ绫诲瀷銆?
+- **娓叉煋**锛氭柊澧?`useDailyState`銆乣reminder-chime.ts`銆乣DailyTodoList.vue`銆傛彁閱掍簨浠跺湪 `DeskpetStage` 閲岃浆鎴?12 绉掔姸鎬佹皵娉★紙鈥滆鍋氥€孹銆嶄簡鈥?鈥滄湁 N 浠垛€︹€濓級骞惰Е鍙戔€滃ソ濂?绛夊緟鈥濊交绁炴€侊紱`payload.sound` 涓?true 鏃舵挱鏀句袱涓嬪緢杞荤殑姝ｅ鸡闊筹紙AudioContext 涓嶅彲鐢ㄥ氨闈欓粯璺宠繃锛夈€備笉鍋氱郴缁熼€氱煡銆佷笉鍋氳闊虫挱鎶ャ€佷笉寰幆鍝嶉搩銆?
+- **UI**锛歚TodoBoard.vue` 椤堕儴鍔犫€滃涓?鏃ュ父鈥濆垏鎹紱`TodoDomain.vue` 鏀逛负宸﹀彸涓ゆ爮锛?960px 涓ゅ垪锛岀獎灞忓爢鍙狅級锛氬涓绘爮=椤圭洰閫夋嫨+瀹夸富璁″垝+椤圭洰寰呭姙+鍙戦€侀瑙堬紝鏃ュ父鏍?`DailyTodoList`锛堝彲缂栬緫銆乨atetime-local 鎻愰啋銆佹瘡澶╅噸澶嶃€佸彲閫夋彁绀洪煶锛夈€傚師鍚嶁€滄垜鐨勫緟鍔炩€濆凡鏀逛负鈥滈」鐩緟鍔炩€濓紝璁剧疆椤靛壇鏍囬鍚屾涓衡€滄寜椤圭洰淇濆瓨寰呭姙锛屼篃璁版棩甯稿皬浜嬶紱鍒扮偣璁╂瀹犺交杞绘彁閱掋€傗€濄€?
+- 楠岃瘉锛氬簲鐢?**992锛?87 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛沶ode/web 绫诲瀷妫€鏌ャ€乣electron-vite build` 閫氳繃銆傜湡瀹為殧绂?profile `ui-daily-20261027` + CDP 9231锛氬埌鏈熷悗姘旀场杞璁板綍鍒扳€滆鍋氥€屸€︺€嶄簡鈥濄€乻tore 鍐欏洖 `lastRemindedAt`銆佷簨浠?`sound:true`锛涙渶灏忓寲鍚?`document.hidden` 浠?true 鍥炲埌 visible 涓旀皵娉″嚭鐜帮紝璇佹槑杞诲懠鍑虹敓鏁堬紱鏃ュ父鏍忔诞绐楀拰璁剧疆涓ゆ爮鍧囧凡鎴浘锛坄docs/validation/screenshots-daily-reminder-20261027/`锛夈€傛彁绀洪煶鍙獙璇佷簡浜嬩欢涓庢挱鏀捐皟鐢ㄨ矾寰勶紝娌℃湁浜哄伐鍚劅楠屾敹銆?
+- 杈圭晫锛氭彁閱掍緷璧?Uta 杩涚▼杩愯锛涙棤绋嶅悗鎻愰啋/璐潯/绯荤粺閫氱煡/澶氳澶囧悓姝ワ紱鏃ュ父寰呭姙涓嶈兘鍙戠粰瀹夸富锛沗model-migration.test.cjs` 宸插姞 `./daily-todo-store` stub銆傛湭鎵撳寘锛宎lpha.18 ZIP 浠嶆槸涓婁竴浠藉垎浜寘銆?
+- 鐜板満锛?173 寮€鍙戞湇鍔′繚鎸佽繍琛岋紱9231 娴嬭瘯瀹炰緥宸插仠姝紝`ui-daily-20261027` 娴嬭瘯 profile 宸插垹闄わ紝鏃ュ父 stable 鏁版嵁鏈Е纰般€傛彁浜ゅ墠宸ヤ綔鍖哄寘鍚湰杞棩甯稿緟鍔炰笌鎻愰啋鏀瑰姩銆?
+
+## 鏈€鏂帮細2026-10-27 寰呭姙涓庡涓昏鍒掑悓姝?
+
+- 鏂板 `app/src/shared/todo-contracts.ts`銆乣app/src/main/todo-store.ts`銆傜敤鎴峰緟鍔炲瓨鍦?profile 鐨?`todo.v1.json`锛屽涓诲揩鐓у瓨鍦?`host-plans.v1.json`锛涗袱鑰呭垎寮€锛岀敤鎴峰緟鍔炴崯鍧忔椂 fail-closed锛屽涓诲揩鐓ф崯鍧忓彧閲嶇疆蹇収銆傞」鐩?key 浣跨敤瑙勮寖鍖?cwd锛圵indows 灏忓啓銆佹鏂滄潬锛夛紝鏈瘑鍒」鐩敤 `unidentified:<hostId>`锛沗associateProject` 鍙惉鐢ㄦ埛鏄庣‘鍏宠仈鐨勬《銆?
+- 鍗忚锛歚runtime-commands.ts` 鏂板 `todo_snapshot`锛坰ource/cwd/items锛屾渶澶?50 椤广€?00 瀛?椤癸級锛涗富杩涚▼鍦?runtime sink 涓洿鎺ヨ惤搴撳苟骞挎挱 `todo-changed`锛屼笉渚濊禆妗屽疇娓叉煋灞傘€俙preload`/`env.d.ts` 澧炲姞 `getTodoState`銆乣todoAddItem/Update/Delete/ClearCompleted/AssociateProject/SendToHost`銆乣onTodoChanged`銆?
+- 瀹夸富鎶撳彇锛歚plugin/shared/uta-todo.mjs` 缁熶竴瑙ｆ瀽 `update_plan`銆乣TodoWrite`銆乣todowrite`銆乣todo_write`銆乣write_todos`锛沗uta-host-hook.mjs` 鍦?Pre/PostToolUse 鍙?v2 蹇収锛決oder/Antigravity hook 鎺ュ叆锛汷penCode `onToolBefore` 鍦?`todowrite` 鍓嶅彂 v2 蹇収锛汥SH 鐩戝惉 `session/event: todo/write` 鍜?`todo_write` 宸ュ叿銆傚揩鐓ф寜 host+session 淇濆瓨锛岀浉鍚屽唴瀹瑰幓閲嶃€?
+- 浼氳瘽/椤圭洰褰掑睘锛歚activeTodoContext` 浼樺厛褰撳墠閫夋嫨/鏈€鏂?runtime session锛岀己澶?cwd 鏃跺洖閫€ `readHostSession` 鐨?30 鍒嗛挓鍐?hook 浼氳瘽鏂囦欢锛涜繖鏍?Claude/ZCode 绛夐潪 Codex hook 涔熻兘鎶婂緟鍔炲綊鍒扮湡瀹炲伐浣滅洰褰曘€傛祴璇曚唬鐮?`model-migration.test.cjs` 澧炲姞 `./todo-store` stub銆?
+- UI锛歚TodoDomain.vue` 涓虹涓冧釜璁剧疆椤碉紙`settings-domains.ts`銆乣SettingsIcon`銆乣SettingsWindowApp`锛夛紱妗屽疇渚ц竟宸ュ叿鏍忔柊澧炩€滃緟鍔炩€濇寜閽紝鎵撳紑 `TodoBoard.vue` 浼撮殢娴獥锛堜笌娑堟伅绐楀彛鍚屾瀹氫綅/鍔ㄧ敾锛屽拰娑堟伅/蹇嵎璁剧疆浜掓枼锛夛紝鏀寔椤圭洰鍒囨崲銆佸涓昏鍒掋€佹垜鐨勫緟鍔炴坊鍔?鍕鹃€?鍒犻櫎锛涘揩鎹烽潰鏉夸笉鍐嶅寘鍚緟鍔炪€傝缃〉淇濈暀瀹屾暣缂栬緫銆佹湭璇嗗埆鍏宠仈銆佸彂閫侀瑙堥兘澶嶇敤鐜版湁 token銆俙useTodoState` 缁熶竴鎷夊彇骞跺湪 `todo-changed`銆佺獥鍙ｈ仛鐒︽椂鍒锋柊锛涘彂閫佹垚鍔熷悗鍐欏洖鐘舵€佹秷鎭紝澶嶅埗鍥為€€鏃朵繚鐣欓瑙堝苟鏄剧ず鍓创鏉挎彁绀恒€?
+- 鍙戦€侊細`todo-send-to-host` 鍙帴鍙楀綋鍓嶇粦瀹氬涓伙紝鎸夐」鐩鍙栭€変腑鐨勬湭瀹屾垚椤癸紝鎷兼垚 鈮?000 瀛椾换鍔℃秷鎭紱鐜版湁 `sendHostMessage` 鏀寔 Codex/DSH/Claude/ZCode/OpenCode锛泆nsupported锛圦oder/Antigravity/閫傞厤鍣級鏃?`clipboard.writeText` 骞惰繑鍥?`mode:'copied'`锛屼笉浼氳嚜鍔ㄥ嬀閫夋垨鏀瑰涓昏鍒掋€?
+- 楠岃瘉锛氬簲鐢?**986锛?81 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**110/110**锛沶ode/web 绫诲瀷妫€鏌ャ€乣npm run plugin:build` 鑷寘鍚鏌ャ€乣electron-vite build` 閫氳繃銆傜湡瀹為殧绂?profile `ui-todo-20261027` / `ui-board-20261027` + CDP 9231 楠岃瘉锛欳odex/Claude 鍏变韩 hook 瀹為檯 POST 蹇収銆佸涓昏鍒?UI銆佷細璇?cwd 椤圭洰鍏宠仈銆佹坊鍔?缂栬緫/鍕鹃€夈€佹湭璇嗗埆鍏宠仈銆佸彂閫侀瑙堛€佹棤浼氳瘽閿欒銆丵oder 澶嶅埗鍥為€€锛堝壀璐存澘鍐呭纭锛夛紱妗屽疇绗洓涓晶杈规寜閽墦寮€ `TodoBoard`銆佷笌娑堟伅绐楀彛浜掓枼銆佹诞绐楀唴娣诲姞/鍕鹃€?鍒犻櫎姝ｅ父銆傛埅鍥?`docs/validation/screenshots-todo-20261027/`銆?
+- 鏈獙锛氱湡瀹炲涓荤獥鍙ｄ腑瑙﹀彂 `update_plan/TodoWrite`锛堝彧鐢ㄦ墜宸?hook payload 璧扮湡瀹?hook 鑴氭湰锛夛紱OpenCode/DSH/Qoder/Antigravity 鐨勭湡瀹炰簨浠讹紱鎴愬姛鐩村彂浼氬湪瀹夸富鍒涘缓鐪熷疄浠诲姟锛屾湭鍦ㄧ湡瀹炰細璇濋噷鎵ц锛涘彂閫佹敮鎸侀€傞厤鍣ㄤ粎澶嶅埗锛屼笉璧?HTTP 閫傞厤鍣ㄣ€傛棤鎵撳寘锛宎lpha.18 ZIP 浠嶆槸涓婁竴浠藉垎浜寘銆?
+- 鐜板満锛?173 寮€鍙戞湇鍔′繚鎸佽繍琛岋紱9231 娴嬭瘯瀹炰緥宸插仠姝紝`ui-todo-20261027`銆乣ui-board-20261027` 娴嬭瘯 profile 鍧囧凡鍒犻櫎锛屾棩甯?stable 鏁版嵁鏈Е纰般€傛彁浜ゅ墠宸ヤ綔鍖哄寘鍚湰杞緟鍔炲姛鑳戒笌娴嬭瘯/鏂囨。鏀瑰姩銆?
+
+## 鏈€鏂帮細2026-10-27 骞冲彴缁戝畾涓€閿垏鎹笌妫€娴嬭繃婊?
+
+- `ConnectionsDomain.vue`锛氬钩鍙扮粦瀹氫笉鍐嶈蛋鈥滆В闄ょ粦瀹?鈫?閲嶈蛋寮曞鈥濄€俙switchHost()` 璋?`store.requestModelAction({ type: 'switch-host', preference })`锛屾垚鍔熷悗鏇存柊 `boundHostId` 骞舵彁绀烘瀹犻噸杞斤紱`DeskpetStage.switchPreference` 璋?`switchPetHost`锛?60ms 鍚?`reloadWindow`銆侫bout/寮曞/璁剧疆澶辫触鏂囨鍚屾銆?
+- `ConnectionsDomain.vue` 鐨勨€滃垏鎹㈠钩鍙扳€濇槸鎵嬮鐞达細`hostListOpen` 榛樿鍦ㄦ湭缁戝畾鏃跺睍寮€銆佸凡缁戝畾鏃舵敹璧凤紱灞曠ず 2 鍒?`.host-switch-option`锛屽彧鏈夊悕绉板拰鈥滃綋鍓?鍒囨崲/涓嶅彲鐢?鍒囨崲涓€濄€傚钩鍙拌鏄庛€佷竴娆′竴骞冲彴鎻愮ず銆佸仠姝换鍔℃彁绀哄拰鏈姞杞芥彃浠惰瘖鏂宸茬Щ闄わ紱蹇嵎闈㈡澘鐨勫涓昏鏄庝篃绉婚櫎銆?
+- **妫€娴?*锛歚createHostOnboarding` 鏂板 `detectPresence()`锛涗富杩涚▼ `detected-hosts` IPC 杩斿洖 `{ ids, checkedAt }`锛宍isTrustedUiSender` 鍙敤銆?5s 缂撳瓨銆傛娴?Codex/DSH/Claude Code/ZCode/OpenCode 鐨勫彲鎵ц鍏ュ彛锛屽苟鏂板 Qoder/Antigravity 妗岄潰绋嬪簭鎺㈡祴锛坄desktopHostExe`锛歚LOCALAPPDATA/Programs`銆丳rogram Files銆乣D:/Qoder CN`銆乣D:/Qoder`銆乣D:/Antigravity`銆丳ATH锛夛紱`deps.qoderExe`/`antigravityExe` 渚涙祴璇曟敞鍏ャ€俙detectOtherHosts()` 鐜板湪缁?Qoder/Antigravity 鐪熷疄 `installed`/`executable` 涓庘€滄湭妫€娴嬪埌鍙墽琛屽叆鍙ｂ€濋樁娈点€?
+- **娓叉煋杩囨护**锛歚services/adapters/index.ts` 鏂板绾嚱鏁?`filterAvailableAgentHosts()`锛涜缃〉涓庡揩鎹烽潰鏉跨敤瀹冭繃婊?agent 瀹夸富锛堟娴嬮泦鍚堜负绌?鏈煡鏃朵繚鐣欏叏閲忥級锛屽缁堜繚鐣欏綋鍓嶇粦瀹氾紱璁剧疆椤靛彧淇濈暀 `entry.loaded` 鎴栧綋鍓嶇粦瀹氱殑閫傞厤鍣ㄦ潯鐩€傚紩瀵?`visibleHostCards` 闅愯棌鏈娴嬬殑鍏朵粬瀹夸富锛屼繚鐣?Codex/DSH 瀹夎鍗犱綅鍜岄殢鍖?MaiBot銆?
+- **鎺ㄨ崘绉婚櫎**锛歚onboarding-flow.ts`銆乣host-onboarding.ts`銆乣host-onboarding-contracts.ts` 鍒犻櫎 `recommended` 瀛楁锛沗OnboardingFlow.vue` 鍒犻櫎鈥滄帹鑽愪粠 Codex 寮€濮嬧€濃€淐odex 浼樺厛鈥濆拰鎸夋帹鑽愰閫夛紱`HostStageCard.vue` 鍒犻櫎鈥滄帹鑽愨€濇爣绛俱€侰odex 浠嶅彲鑷姩瀹夎锛屼絾涓嶅啀琚紭鍏堟爣璁般€?
+- 娴嬭瘯锛氭柊澧?`host-onboarding` 鐨?Qoder/Antigravity 娉ㄥ叆妫€娴嬨€乣onboarding-flow` 鐨勬湭妫€娴嬪涓婚殣钘?鏃犳帹鑽愩€乣host-selection` 鐨勮繃婊ょ函鍑芥暟锛涙洿鏂?quick/settings-center/UI 鍥炲綊銆傚簲鐢?**974 椤癸紙969 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛宯ode/web 绫诲瀷妫€鏌ャ€乣electron-vite build` 閫氳繃銆?
+- 鐪熷疄楠屾敹锛氶殧绂?profile `ui-detect-20261027` + CDP 9231 + 鐜版湁 5173 娓叉煋鏈嶅姟銆傞娆″紩瀵兼樉绀?7 涓凡瀹夎瀹夸富鐨勭湡瀹炵粨鏋滐紙Qoder/Antigravity 宸插畨瑁咃紱MaiBot 涓洪殢鍖呴€傞厤鍣級锛屾棤鈥滄帹鑽愨€濓紱璁剧疆椤碘€滃垏鎹㈠钩鍙扳€濇姌鍙?灞曞紑姝ｅ父锛? 涓€夐」锛屾棤璇存槑娉ㄩ噴锛涚嫭绔嬬姸鎬佺偣 Codex 鍐欏叆 `pet-binding.json` 骞惰Е鍙戞瀹犻噸杞斤紱蹇嵎闈㈡澘瀹夸富鍒楄〃鍚屾牱杩囨护銆傛埅鍥?`docs/validation/screenshots-host-filter-20261027/host-switch-accordion.png`銆乣one-click-switch.png`銆?
+- 杈圭晫锛氶€傞厤鍣ㄦ寜鎻掍欢鍔犺浇/褰撳墠缁戝畾鏄剧ず锛屼笉鎺㈡祴 MaiBot/AstrBot 绋嬪簭鏄惁瀹夎锛涢娆″紩瀵间粛淇濈暀 Codex/DSH 瀹夎鍏ュ彛銆俀oder/Antigravity 妫€娴嬭鐩栧父瑙佸畨瑁呬綅缃紝闈炴爣鍑嗚嚜瀹氫箟鐩綍鏈仛鍏ㄧ洏鎵弿锛涙娴嬬粨鏋滅紦瀛?15s锛岀獥鍙ｈ仛鐒︿細鍒锋柊銆?
+- 鐜板満锛?173 寮€鍙戞湇鍔′繚鎸佽繍琛岋紱9231 闅旂瀹炰緥宸插仠姝紝娴嬭瘯 profile `ui-detect-20261027` 涓庝笂涓€杞?`ui-switch-20261027` 鍧囧凡鍒犻櫎锛屾棩甯?stable 鏁版嵁鏈Е纰般€傚叏閲忔祴璇曚笌绫诲瀷妫€鏌ュ湪娓呯悊鍓嶉€氳繃锛涙湭鎵撳寘锛宎lpha.18 ZIP 浠嶆槸涓婁竴浠藉垎浜寘銆?
+
+## 鏈€鏂帮細2026-10-27 GPT 鍓嶇鏀瑰姩瀵归綈锛?27e914锛?
+
+- 瀹￠槄 GPT 鐨?6 涓彁浜わ紙`5023663` 璇勪及銆乣c1083e3` 鍙戦€佸畨鍏ㄣ€乣0130c35` 鍘嗗彶/杈撳叆鎻愮ず銆乣c0dc4db` 杩佺Щ銆乣df3138d` 鏍″噯銆乣d3918f6` 鍘嗗彶/杩佺Щ杈圭晫锛夈€傚姛鑳戒笌瀛樺偍閫昏緫鏈敼锛屽彧璋冩暣鍓嶇琛ㄧ幇銆?
+- `ModelCalibrationPanel.vue`锛氭鏌ユ寜閽Щ鍏?`.panel-head` 鍙充晶锛涘瓧娈垫敼涓?3 鍒楀苟澶嶇敤 `.calibration-select`锛?6px/9px/`--uta-input`/`--uta-focus`锛夛紱寮哄害鏀逛负 `.bio-scrub` + `.bio-scrub-grip` + 閫忔槑 `.bio-range-input`锛屼笌宸ュ潑婊戞潯涓€鑷达紱婊戞潯 `@input` 閲嶇疆 `previewed`锛屽繀椤婚噸鏂伴瑙堝悗淇濆瓨銆傜獎灞?900px 涓ゅ垪銆?20px 鍗曞垪銆?
+- `SettingsTransferPanel.vue`锛歬icker 浠庨噸澶嶇殑鈥滄暟鎹笌杩佺Щ鈥濇敼涓衡€滄暟鎹浠解€濓紱`.transfer-select` 36px/9px銆乣.transfer-check` accent-color銆佽楂?灏忓瓧缁熶竴锛沗modelLabel` 浼樺厛鏄剧ず宸插姞杞芥ā鍨嬬殑鍚嶇О锛屾湭鐭ユ潵婧愭墠鏄剧ず璺緞锛?20px 浠ヤ笅涓ゅ垪銆?
+- `ChatBubble.vue`锛氭悳绱?瀵煎嚭涓庢竻绌虹‘璁ゅ垎琛岋紝`.history-confirm` 鐙珛鎻愮ず锛涙潵婧愭爣绛句娇鐢ㄧ煭 host label锛坄HOST_LABELS`锛夛紝瀹屾暣 host/session 浠呮斁 `title`锛涚敤鎴锋秷鎭墠鏄剧ず delivery锛涘け璐ョ敤鐜版湁 `#e5533d`锛涙悳绱粛鍖归厤 host/session銆?
+- `QuickInput.vue` / `DeskpetStage.vue`锛氬瓧鏁板彧鍦ㄦ湁杈撳叆鏃舵樉绀猴紝瓒呴檺鎵嶅彉鑹诧紱bridge 鎻愮ず绮剧畝涓衡€滃彂閫佺粰 鈥︼紱浼氳瘽鍙湪璁剧疆涓€夋嫨銆傗€濓紱杩炴帴椤靛仠姝换鍔℃彁绀虹缉鐭€?
+- 鏂板 `app/tests/ui-style-alignment.test.cjs`锛? 椤癸級閿佸畾涓婅堪鏍峰紡閫夋嫨锛涘簲鐢?**969锛?64 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛宯ode/web 绫诲瀷妫€鏌?鏋勫缓閫氳繃銆傜湡瀹?Hiyori 闅旂绐楀彛妫€鏌ヤ簡鏍″噯娴?娣辫壊銆佽縼绉婚妫€鍒楄〃銆佹秷鎭潵婧?澶辫触鐘舵€併€佽緭鍏ユ彁绀猴紱娴嬭瘯 profile 宸叉竻鐞嗐€傛病鏈夊仠姝?5173 涓婂凡鏈夌殑寮€鍙戝疄渚嬶紝涔熸病鏈夋敼 GPT 鐨勫悗绔?杩佺Щ/鏍″噯閫昏緫銆傜湡瀹炴枃浠堕€夋嫨瀵硅瘽妗嗐€佽法鏈哄櫒杩佺Щ銆佺湡瀹炲涓诲仠姝换鍔′粛鏈獙鏀躲€傛埅鍥惧湪 `docs/validation/screenshots-ui-alignment-2026-10-27/`銆?
+
+## 鏈€鏂帮細2026-10-27 鍔熻兘涓嶈冻淇锛氬巻鍙插拰杩佺Щ杈圭晫澶嶆牳
+
+- `stores/chat.ts` 姝ｆ枃鏈€澶?1000銆佷复鏃剁姸鎬?鍥剧墖鏈€澶?100锛屽垎鍒鍓紱澶ч噺瑙ｈ涓嶅啀鎸ゆ帀淇濆瓨鐨勬鏂囥€傚洖褰掓祴璇曞厛鍐?1000 鏉℃鏂囷紝鍐嶅啓 150 鏉＄姸鎬侊紝纾佺洏浠嶄繚鐣欏叏閮ㄦ鏂囥€?
+- `data-transfer.ts` 鍚堝苟鐢ㄦ埛鍔ㄤ綔鏃堕獙璇佺幇鏈夋《锛屼絾淇濈暀鐜版湁鍘熷瀵硅薄鍜屽叾浠栨ā鍨嬫《鐨勬湭鐭ュ瓧娈碉紱鏂板鍔ㄤ綔浠嶇粡鏍￠獙/娓呯悊銆傝縼绉绘枃浠?v2 澧炲姞 `calibrations`锛屾寜瀹屾暣妯″瀷璧勬簮绛惧悕閫夋嫨瀵煎叆锛涜鍙?v1 鏃朵负绌恒€俙model-calibration.merge` 浠呮柊澧炴病鏈夋湰鍦拌褰曠殑绛惧悕锛屾嫆缁濇棤鏁堛€佹湭鏉?鎹熷潖鏁版嵁鍜?stale expected锛屽凡鏈夋潯鐩笉瑕嗙洊銆傚浠界幇鍚鍏ュ墠鏍″噯瀵硅薄銆?
+- 鐙珛 `functional-fix-check` 鐪熷疄 Electron 璁剧疆绐楀彛璋冪敤璇诲彇/鍚堝苟 IPC锛氬凡鏈?Hiyori 鍙嶅悜鏄犲皠涓嶅彉锛屾ā鎷熸柊绛惧悕鏂板 1銆佸師绛惧悕璺宠繃 1锛屾棫 expected 琚嫆缁濄€傛祴璇?PID 4124 宸叉牳瀹炲苟鍋滄锛涙湭瑙︾鏃ュ父 profile銆?
+- 鍏ㄩ噺搴旂敤 **965 椤癸紙960 閫氳繃銆? 璺宠繃锛?*锛涘叾鍚庢柊澧?merge 寮傚父杈撳叆淇濇姢锛?6 椤瑰搴斿畾鍚戞祴璇曘€乶ode/web 绫诲瀷妫€鏌ャ€佹渶缁堟瀯寤洪€氳繃銆俇I 鐨勬枃浠堕€夋嫨瀵硅瘽妗嗐€佹崲鏈哄叏娴佺▼銆佸妯″瀷瑙傛劅灏氭湭瀹炴祴锛涜縼绉诲叆鍙ｄ笉鍚ā鍨嬫枃浠躲€佽繛鎺ュ湴鍧€銆佸瘑閽ャ€佽亰澶╄褰曪紝澶囦唤鏃犱竴閿洖婊氥€?
+- 鍋滄瀹夸富浠诲姟灏氭湭瀹炵幇銆傚畼鏂?Codex App Server 鐨?`turn/interrupt` 闇€鍑嗙‘ threadId 涓?turnId锛涙湰鏈哄彧璇?`codex app-server daemon version` 杩炴帴 `app-server-control.sock` 澶辫触锛學indows 閿欒 10050锛屾棤娉曡瘉鏄庤鎺у埗绔偣杩炴帴鏈闈細璇濄€傝繛鎺ラ〉鎸囧紩鍥炲涓诲仠姝紝涓嶄吉閫犲彇娑堟垚鍔熸垨鐚滄祴鐩爣銆傚叾浠栧钩鍙颁篃闇€閫愪釜鏍稿疄銆?
+
+## 鏈€鏂帮細2026-10-27 鍔熻兘涓嶈冻淇锛氭ā鍨嬮€氶亾鏍″噯
+
+- `ModelCalibrationPanel.vue` 鍦ㄨ鑹查〉鎻愪緵 10 涓湁绗﹀彿璇箟閫氶亾锛涚敱鐪熷疄 Core 鍙傛暟/鐗╃悊璧勬簮鍒楀嚭涓€у€煎湪鑼冨洿鍐呴儴銆侀潪鐗╃悊杈撳嚭銆佹湭鍗犲叾浠栧凡纭璇箟閫氶亾鐨勫€欓€夈€傛樉寮忛瑙堜竴涓弬鏁扮殑 10% 鑼冨洿锛岃嚜鍔ㄥ洖钀斤紱鐢ㄦ埛纭鍚庨€夋嫨鏂瑰悜/寮哄害骞朵繚瀛橈紝鏀寔浜屾纭鎭㈠榛樿銆傜溂鐫涘紑鍚堜笌璇磋瘽鍙ｅ瀷涓嶅湪姝ゆ墜鍔ㄦ槧灏勩€?
+- `main/model-calibration.ts` 鍦ㄥ綋鍓?userData 鐨?`model-calibration.v1.json` 瀛樻暟鎹紝鎸夊畬鏁存ā鍨嬭祫婧愮鍚嶉殧绂伙紝鐙崰涓存椂鏂囦欢涓庡師瀛愭浛鎹紱鎹熷潖/杈冩柊 schema/閾炬帴鎷掔粷瑕嗙洊銆備繚瀛樹富杩涚▼閲嶇畻鐩爣妯″瀷绛惧悕銆乧ompare-and-swap 妫€鏌ラ瑙堟椂鐨勬暟鎹紱UI 闇€閲嶈浇妗屽疇鐢熸晥銆?
+- `model-runtime.ts` 閲嶆柊鏍￠獙 live Core锛岀墿鐞嗚緭鍑恒€佽寖鍥翠笉瀹夊叏銆佸崰鐢ㄥ叾浠栬涔夐€氶亾鐨勫€欓€変笉浼氳繘鍏ユ柊鏄犲皠锛涙棩甯?additive 鍐欏叆鍙婂ご閮ㄩ瑙堣€冭檻鏂瑰悜/寮哄害锛屼繚鐣欓璁惧弬鏁版墍鏈夋潈涓庡彛鍨嬩繚鎶ゃ€傛湭瑕嗙洊鐪肩潧寮€鍚堜笌鍙ｅ瀷鏄犲皠锛屼篃鏈畬鎴愯法妯″瀷鍚岃剼鏈鎰熼獙鏀躲€?
+- 鐪熷疄闅旂 Hiyori 瀹炰緥閫氳繃 CDP 閫?`ParamAngleX` 鍙嶅悜锛岄瑙堜腑閲囬泦 139 娆＄湡瀹?Core 鍐欏叆銆佹渶灏忓€肩害 -2.35锛涗繚瀛樺悗閲嶈浇妗屽疇锛宍inspect-performance` 杩斿洖 `source=manual / direction=reversed`銆傞娆℃祴璇曞彂鐜?Vue 浠ｇ悊缁?IPC 鏃犳硶鍏嬮殕锛岀幇宸插睍寮€涓烘櫘閫氬璞″苟琛ョ湡瀹?SFC 鍏嬮殕鍥炲綊銆傛祴璇?profile `functional-fix-check`銆丳ID 23612 宸插仠姝紱娌℃湁鏃ュ父閰嶇疆鍐欏叆銆傚叏閲忓簲鐢?**960 椤癸紙955 閫氳繃銆? 璺宠繃锛?*锛岀被鍨嬫鏌ヤ笌鏋勫缓閫氳繃銆?
+- 杩佺Щ鏆備笉鍖呭惈鏂版牎鍑嗘枃浠躲€佹ā鍨嬭祫婧愩€佽繛鎺ュ弬鏁?瀵嗛挜鎴栦竴閿洖婊氾紱瀹夸富鍋滄浠诲姟闇€瑕佸噯纭殑 thread/turn 褰掑睘锛屽皻鏃犲彲闈犵幇鏈夋帴绾匡紝杩炴帴椤垫槑纭彁绀哄洖瀹夸富鍋滄銆傜湡瀹炲妯″瀷瑙嗚楠屾敹鍙婃枃浠跺璇濇浠嶅緟鍋氥€?
+
+## 鏈€鏂帮細2026-10-27 鍔熻兘涓嶈冻淇锛氬叕寮€鍋忓ソ涓庤嚜瀹氫箟鍔ㄤ綔杩佺Щ
+
+- `SettingsTransferPanel.vue` / `services/data-transfer.ts` 浣跨敤鐗堟湰鍖?`uta-data-transfer` 鏂囦欢瀵煎嚭 12 椤瑰叕寮€鍋忓ソ銆佸悇妯″瀷 `isUserPreset` 鍔ㄤ綔锛涗笉鍖呭惈妯″瀷鏂囦欢銆佽繛鎺ュ湴鍧€銆佸瘑閽ャ€佽亰澶╄褰曘€傚鍏ヤ互澶嶉€夋閫夊亸濂斤紝鎸夋潵婧愭ā鍨嬮€夋嫨鐩爣锛涘彧鏄剧ず鍦ㄥ綋鍓嶅疄渚嬪凡寤虹珛棰勮妗剁殑宸插畨瑁呮ā鍨嬶紝閬垮厤棣栨瀵煎叆閬斀榛樿鍔ㄤ綔锛涘悓 ID/鍚嶇О淇濇寔鐜扮姸銆備汉宸ユ敼鏄犲皠鏃舵彁绀烘鏌ョ洰鏍囨ā鍨嬨€?
+- 纭鍓嶆牳瀵瑰綋鍓嶈缃?revision銆佸姩浣滃師鏂囧拰鑽夌鐘舵€侊紱鍐欎箣鍓?`settings-transfer-backup` 鍦ㄥ綋鍓?`userData/transfer-backups` 淇濈暀鍘熷鍔ㄤ綔 blob 鍜屽叕寮€鍋忓ソ銆傝缃粡鐜版湁 CAS patch锛屼箣鍚庡姩浣滀竴娆?setItem锛涘啀娆℃鏌ュ姩浣滃師鏂囷紝浠讳綍鍚庡崐娈靛け璐ユ槑纭姤鍛婇儴鍒嗗畬鎴愩€傚浠界洰褰曢摼鎺ユ嫆缁濄€佹枃浠剁嫭鍗犲垱寤恒€傚綋鍓嶅浠芥槸鏈満鎭㈠鏉愭枡锛屽皻鏃犱竴閿洖婊?UI锛涜法瀛樺偍鐨勪袱姝ュ啓鍏ヤ笉鏄簨鍔°€?
+- 鏁版嵁鏂囦欢鐗堟湰/鏈煡瀛楁/鍋忓ソ鍊?棰勮鏍￠獙鎷掔粷寮傚父锛屽浠藉け璐ュ拰棰勬澶辨晥涓嶄慨鏀圭洰鏍囥€傚鍏?瀵煎嚭鏂囦欢瀵硅瘽妗嗙敱涓昏繘绋嬪浐瀹?IPC 瀹炵幇锛屽鍑洪€氳繃涓存椂鏂囦欢鏇挎崲銆俙data-transfer.test.cjs` 鍚湡瀹?SFC setup 鐨勫浠姐€佸啿绐佸拰澶辫触楠岃瘉锛涘叏閲?**953 椤癸紙948 閫氳繃銆? 璺宠繃锛?*锛岀被鍨嬫鏌ュ強鏋勫缓閫氳繃銆?
+- 鐙珛 `functional-fix-check` profile 鐨勭湡瀹?Electron 璁剧疆绐楀彛鏄剧ず鍏ュ彛銆佹寜閽彲鐢ㄣ€佹棤妯悜婧㈠嚭锛汣DP 璋冪敤鐪熷疄澶囦唤 IPC 鍒涘缓娴嬭瘯鏂囦欢銆侾ID 25064 宸茬‘璁ゅ苟鍋滄锛屾棤 Uta/Electron 娈嬬暀锛涙湭鎿嶄綔鏃ュ父 profile銆傛湭瀹炴祴绯荤粺鏂囦欢瀵硅瘽妗嗐€佹崲鏈哄畬鏁存祦绋嬩笌涓嶅悓妯″瀷鍔ㄤ綔瑙傛劅銆?
+- 鍓╀綑锛氳縼绉绘湭鍖呭惈妯″瀷鏂囦欢銆佽繛鎺ュ弬鏁?鍑嵁銆佽亰澶╄褰曟垨涓€閿洖婊氾紱闈炴爣鍑嗘ā鍨嬫牎鍑嗗拰瀹夸富鍋滄浠诲姟灏氭湭瀹炵幇銆傚畼鏂?Codex App Server 鏀寔 `turn/interrupt`锛屼絾瑕佹眰鍑嗙‘鐨?threadId/turnId锛沀ta 鐜版湁 hook/娉ㄥ唽琛ㄦ棤娉曞彲闈犺瘉鏄庝笌褰撳墠妗岄潰浼氳瘽鐨勮繛鎺ュ拰杞褰掑睘锛屼笉寰楃寽娴嬬洰鏍囨垨缁堟鍏朵粬鑱婂ぉ銆?
+
+## 鏈€鏂帮細2026-10-27 鍔熻兘涓嶈冻淇锛氭秷鎭巻鍙蹭笌杈撳叆鎻愮ず
+
+- `main/chat-history.ts` 浣跨敤褰撳墠鐜 `userData/chat-history.v1.json`锛岄獙璇佺増鏈€佸ぇ灏忎笌鏉＄洰锛屾嫆缁濋摼鎺?鎹熷潖/鏈潵鐗堟湰瑕嗙洊锛涗复鏃舵枃浠?fsync 鍚庡師瀛愭浛鎹€備粎淇濆瓨姝ｆ枃鍜屽彲鐢ㄦ潵婧?鍙戦€佺姸鎬侊紝涓嶄繚瀛樹复鏃剁姸鎬佹皵娉℃垨琛ㄦ儏鍥剧墖锛涙渶澶?1000 鏉★紝娑堟伅鍐呭淇濆瓨鍦ㄦ湰鏈猴紝鏈仛鍐呭鍔犲瘑銆?
+- 娓叉煋鍣ㄥ紓姝ヨ鍙栧苟涓庡埌杈句腑鐨勬柊娑堟伅鍚堝苟锛涙祦寮忓啓鍏ュ悎骞躲€侀€€鍑烘椂璇锋眰 flush锛屽け璐ユ彁绀轰笌閲嶈瘯锛屾仮澶嶆秷鎭笉閲嶆挱娴姩姘旀场銆傛竻绌洪渶浜屾纭锛屽啓鐩樺け璐ヤ繚鐣欏唴瀛樹笌纾佺洏锛屾竻绌烘湡闂存柊鍒拌揪娑堟伅淇濈暀锛涙敮鎸佹悳绱㈠拰鍙﹀瓨 JSON銆傚涓绘彁渚涗細璇濇椂淇濆瓨鐪熷疄鏉ユ簮锛涘彂閫佹ˉ鎴愬姛鍥炰紶 sessionId锛涚己淇℃伅鏄剧ず鏈褰曪紝涓嶈兘浼€犮€?
+- 杈撳叆妗嗘樉绀哄涓昏兘鍔涗笌鐩磋繛妗?1000 瀛楃璁℃暟锛孋odex/DSH/Claude/ZCode/OpenCode 鎸変富杩涚▼妗ヨ瘑鍒紱涓嶆敮鎸佸弽鍚戣緭鍏ョ殑骞冲彴绂佺敤鍙戦€佸苟鎻愮ず鍥炲涓汇€傛湭瀹炵幇铏氬亣鐨勪换鍔″仠姝紝寰呮牳瀹炲悇瀹夸富鍘熺敓 API銆?
+- 鍏ㄩ噺搴旂敤 **947 椤癸紙942 閫氳繃銆? 璺宠繃锛?*锛沶ode/web 绫诲瀷妫€鏌ュ拰 build 閫氳繃銆傚彟鍔犲彂閫佹潵婧愭柇瑷€鍚庨渶鍐嶈窇鐩稿叧瀹氬悜娴嬭瘯銆傜嫭绔?`functional-fix-check` profile 鐨勭湡瀹?Electron 杞藉叆 fixture 鍚庯紝鐢?CDP 鐐瑰嚮楠岃瘉鍘嗗彶鎭㈠/鏉ユ簮銆佹悳绱€佷簩娆＄‘璁ゆ竻绌轰笌纾佺洏涓虹┖锛汸ID 20104 宸叉牳瀵瑰苟鍋滄锛屾棤鍏朵粬 Uta/Electron 杩涚▼銆傛湭娴嬬郴缁熷鍑哄璇濇銆佸師鐢熼紶鏍囩偣鍑汇€佸己鍒跺穿婧冨悗鐨勬渶鍚庝竴鏉℃寔涔呭寲銆?
+- 褰撳墠浠诲姟杩樺寘鎷潪鏍囧噯妯″瀷鏍″噯銆佽法瀹炰緥杩佺Щ鍜屽彲鏀寔瀹夸富鐨勫彇娑堜换鍔★紱灏氭湭瀹屾垚锛岀户缁墠閲嶈鍏剁幇鏈夊绾︼紝涓嶅啓鏃ュ父鏁版嵁銆?
+
+## 鏈€鏂帮細2026-10-27 鍔熻兘涓嶈冻淇锛氬彂閫佸畨鍏?
+
+- 鐢ㄦ埛宸叉巿鏉冧慨澶嶄笂涓€杞瘎浼扮殑鍏ㄩ儴浜嬮」锛涗粠 `main/5023663` 寮€濮嬶紝鍒濆宸ヤ綔鍖哄共鍑€锛屾棤 Uta/Electron 杩涚▼锛岃繍琛?profile 鏈‘璁ゃ€?
+- **[P1: 鎵嬪姩閫夊畾浼氳瘽鏈噸鏂扮櫥璁版椂锛屾秷鎭€€鍥炴渶鏂颁細璇漖**锛歚selectedHostSession` 鐜板湪鐢?undefined 琛ㄧず鑷姩銆乶ull 琛ㄧず鎵嬪姩鐩爣缂哄け锛屽彂閫佹ˉ鍙湪 undefined 鏃惰窡闅忔渶鏂帮紱null 杩斿洖 no-session锛屾瀹犱繚鐣欒崏绋裤€?*[P2: 闀挎枃鏈闈欓粯鎴埌 1000 瀛楃锛屼粛鎻愮ず鍙戦€佹垚鍔焆**锛氳秴 1000 瀛楃鐩存帴澶辫触锛屽師鑽夌淇濈暀锛涗笉鏀瑰彉 HTTP 閫傞厤鍣ㄣ€?
+- 24 椤瑰畾鍚戞祴璇曘€乶ode/web 绫诲瀷妫€鏌ュ拰鍙楁帶鍙嶅悜鎺㈤拡閫氳繃锛涙湭杩炴帴鐪熷疄瀹夸富鎴栧仛 GUI 楠屾敹銆傝瘖鏂剼鏈凡鏀规垚鏂█涓ゅ淇琛屼负锛岃亰澶╁唴瀛橀儴鍒嗕粛鏄棫鐘舵€佽瀵燂紝寰呭悗缁悓姝ャ€?
+- 寰呯户缁細娑堟伅鍘嗗彶淇濆瓨鍜屾潵婧愩€佽緭鍏ヨ兘鍔涙彁绀哄強鍙敮鎸佸涓荤殑鍙栨秷銆侀潪鏍囧噯妯″瀷鏍″噯銆佽法瀹炰緥杩佺Щ銆備笉瑕佸绉颁笂杩板伐浣滃凡瀹屾垚锛涚户缁娇鐢ㄩ殧绂?profile銆?
+
+## 鏈€鏂帮細2026-10-27 鍔熻兘鎬т笉瓒宠瘎浼帮紙鍩虹嚎 4fd1fc9锛?
+
+- 鐢ㄦ埛浠呰姹傝瘎浼帮紝鏈疆涓嶄慨涓氬姟浠ｇ爜銆傛姤鍛?[FUNCTIONAL-ASSESSMENT-2026-10-27](../FUNCTIONAL-ASSESSMENT-2026-10-27.md)锛涜瘖鏂剼鏈?`docs/validation/functional-assessment-2026-10-27.cjs`锛屼粠鏍圭洰褰曠洿鎺ョ敤 Node 鎵ц銆傚畠鏂█褰撳墠缂洪櫡琛屼负锛屼慨澶嶅悗搴旀敼鎴愮浉搴旀寮忓洖褰掞紱涓嶆槸鏈熸湜闀挎湡淇濇寔閫氳繃鐨勪骇鍝佹祴璇曘€?
+- **[P1: 鎵嬪姩閫夊畾浼氳瘽鏈噸鏂扮櫥璁版椂锛屾秷鎭€€鍥炴渶鏂颁細璇漖**锛歚index.ts:selectedHostSession` 鎶婃棤鍋忓ソ涓庡亸濂界洰鏍囦笉鍦ㄥ唴瀛樻敞鍐岃〃閮藉彉鎴?null锛沗host-bridge.ts:sendHostMessage` 鐢?nullish fallback 璇诲彇鏈€鏂?hook 浼氳瘽銆傚彈鎺ц皟鐢ㄧ敓浜у嚱鏁帮細閫?A銆佹敞鍐岃〃鏃?A銆佹渶鏂?B锛屾渶缁堝弬鏁版槸 `--thread B` 涓旀垚鍔熴€傞渶瑕佸尯鍒嗚嚜鍔?宸查€夊彲鐢?宸查€夌己澶憋紝缂哄け闃绘鍙戦€併€備笉鑳芥妸宸插喅瀹氱殑鍚屽钩鍙版墍鏈変細璇濋┍鍔ㄤ竴瀹犺鎶ヤ负缂洪櫡銆?
+- **[P2: 闀挎枃鏈闈欓粯鎴埌 1000 瀛楃锛屼粛鎻愮ず鍙戦€佹垚鍔焆**锛歚host-bridge.ts` clip 1000锛孮uickInput 鏃犻暱搴︽彁绀恒€傚彈鎺фā鎷熷瓙杩涚▼鏀跺埌 1000/1018 瀛楃涓斿熬閮ㄦ潯浠舵秷澶便€備粎娑夊強涓昏繘绋嬪涓绘ˉ锛屼笉鎵╁ぇ鍒?HTTP 鎻掍欢銆?
+- 浜у搧缂哄彛锛氭秷鎭?store 绾唴瀛樸€佷笂闄?200 涓旀棤 host/session 瀛楁锛涜緭鍏ュ彛鏈彁鍓嶈鏄庤兘鍔涳紝鍙栨秷瀹夸富浠诲姟鏃犲畬鏁存帴鍙ｏ紱琛ㄧ幇 runtime 鍥哄畾绌?overrides銆佷粎娑堣垂 standard-id锛岀己鐢ㄦ埛鏍″噯鎸佷箙鍖栵紱宸叉湁棰勮瀵煎嚭涓庢棫鍋忓ソ瀵煎叆锛屼絾缂虹粺涓€杩佺Щ銆?
+- 楠岃瘉锛氬彂閫佹ˉ/鍋忓ソ/娉ㄥ唽琛?杩炴帴绔炴€?妯″瀷琛ㄧ幇涓庤兘鍔?STT/TTS 鐨?8 涓棦鏈夋祴璇曟枃浠?**119 閫氳繃銆? 澶辫触銆? 璺宠繃**锛涚敓浜ф帰閽堢‘璁や袱椤圭己闄峰拰鑱婂ぉ store 鐨勬槗澶辨€с€侷O/瀛愯繘绋嬪潎妯℃嫙锛屾棤鐪熷疄瀹夸富娑堟伅銆傛棤涓氬姟鍙樻洿锛屼笉璺戞瀯寤烘垨鍏ㄩ噺娴嬭瘯銆?
+- 鐜板満锛氬垵濮?`main/4fd1fc9` 骞插噣锛涙湭鍙戠幇 Uta/Electron 杩涚▼锛岃繍琛?profile 鏈‘璁わ紱褰撳墠鑱婂ぉ MCP 鑳藉姏鏌ヨ鎻愮ず杩愯鏃?閰嶅涓嶅彲鐢ㄣ€傛病鏈夊惎鍔?鍋滄妗屽疇銆佸畨瑁呮彃浠躲€佽Е纰版棩甯歌缃垨鍙戝竷浜х墿銆?
+- 寰呴獙锛氱湡瀹?DSH 瀹夎涓庨噸鍚悗宸ュ叿/瀹℃壒/RP銆佺湡瀹?MaiBot + QQ銆佹湁澹伴摼璺笌璁惧澶辫触銆佸涓婚噸杩炪€侀暱鏃?澶氬睆浠嶆寜鐜版湁楠岃瘉鏂囨。淇濈暀銆備笅涓€姝ュ缓璁厛淇袱椤瑰彂閫佺己闄凤紝鐢ㄦ埛灏氭湭鎺堟潈瀹炴柦銆?
+
+## 鏈€鏂帮細2026-10-26 alpha.18 DSH 涓€閿敞鍏ワ紙69758f3锛?
+
+- 鏈嬪弸鏈哄櫒涓?DSH 妫€娴嬩笉鍒扮洰褰曞悗鏃犳硶缁х画銆傚師瀹炵幇鍙鏌ラ粯璁?`D:/DeepSeek-Harness` 涓?`~/.dsh/profiles/desktop`锛屽崱鐗囧彧缁?`dsh plugin ...` 鍛戒护锛涙櫘閫氱敤鎴?PATH 閲屾病鏈?`dsh`锛岃嚜瀹氫箟瀹夎/棣栨鏈惎鍔?DSH 閮戒細鍗′綇銆?
+- **璺緞**锛歚host-paths.ts` 澧炲姞 `harnessHome` override锛坄host-paths.json`锛岀幆澧?`UTA_DSH_HOME`锛夛紝鑷姩灏濊瘯 `%LOCALAPPDATA%\Programs\DeepSeek Harness`銆乣Program Files`銆佸師榛樿鐩綍锛涙樉寮?`DSH_HOME`/鐢ㄦ埛閫夋嫨鐨?home 浼樺厛锛屽嵆浣挎殏鏃朵笉瀛樺湪涔熶笉浼氬伔鍋锋敼鐢ㄥ埆鐨?`.dsh`銆俙writeDshHomeOverride` 鎺ュ彈 `.dsh` 鎴?`profiles/desktop`锛屼繚瀛樹负 `.dsh` home銆?
+- **妫€娴?*锛歚host-onboarding.ts` 姣忔妫€娴?瀹夎閲嶆柊瑙ｆ瀽璺緞锛堜笉鍐嶇紦瀛樺伐鍘傚垱寤烘椂鐨勮矾寰勶級锛涙鏌?exe銆丆LI銆乸rofile package銆佹彃浠朵緷璧?bundle 鍜?`node_modules/@uta/deepseek-harness-plugin` 閾炬帴锛涚己绋嬪簭/缂?home 鏃惰繑鍥炲彲鎿嶄綔鐨勯樁娈碉紝`pathActionLabel`/`homeActionLabel` 鎺у埗鍏滃簳鎸夐挳銆?
+- **瀹夎**锛歚installDsh` 鍏?`tasklist` 妫€鏌?`DeepSeek Harness.exe` 鏈繍琛岋紝鍒涘缓 `dsh-plugin-install.lock`锛屽浠?`package.json`/`cordis.patch.yml`/`cordis.yml`/`pnpm-lock.yaml` 鍒?`runtimeDir/dsh-plugin-backups/<timestamp>`锛岀劧鍚?spawn DSH exe + `resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js`锛宔nv 鍔?`ELECTRON_RUN_AS_NODE=1`銆乣DSH_HOME=<home>`锛屽弬鏁?`plugin --profile desktop add <resources/uta-plugins/deepseek-harness>`锛涘畬鎴愬悗鍥炶楠岃瘉銆傚け璐ユ仮澶嶅浠斤紱瓒呮椂淇濈暀閿佷笌澶囦唤锛涘凡瀹夎杩斿洖鈥滄棤闇€閲嶅瀹夎鈥濄€?
+- **UI/IPC**锛欴SH 鍗＄墖鈥滃畨瑁?Uta 鎻掍欢鈥濄€佸娉ㄢ€滃厛瀹屽叏閫€鍑?DSH鈥濓紱`chooseHostPath('harness')` 閫夋嫨鍜?`settings-dsh-home-choose` 閫夋嫨 `.dsh`锛宲reload `chooseDshHome`锛岄€夋嫨鍚庨噸鏂版娴嬶紱`HostStageCard` 鏂板 `pathBusy`/`choose-path`/`choose-home`锛屽畨瑁呮寜閽枃瀛楃敱 `installLabel` 椹卞姩锛岃В闄ら樆鏂枃瀛楁寜瀹夸富鍖哄垎銆?
+- 楠岃瘉锛氬簲鐢?**939锛?34 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛孧aiBot 閫傞厤鍣?17/17锛岀被鍨嬫鏌?鏋勫缓閫氳繃锛涚湡瀹炴簮鐮?Electron 涓庤В鍘嬪悗鐨?alpha.18 鎴愬搧鍖呴兘鐢ㄩ殧绂诲亣 DSH home/CLI 瀹屾垚鈥滄娴?鈫?瀹夎 鈫?澶囦唤 鈫?鍥炶 鈫?閲嶅惎鎻愮ず鈥濓紝鎻掍欢閾炬帴鎸囧悜 `resources/uta-plugins/deepseek-harness`锛岀湡瀹?`~/.dsh` 鐨?mtime/鍐呭鏈彉锛涚湡瀹?DSH CLI 鍙窇浜嗗彧璇?`plugin list`銆俍IP `Uta-0.2.0-alpha.18-win-x64.zip`锛孲HA-256 `8ab16619d459f811cbb977cbcf30d4505bfef8a26f0a271b035e2904070ff394`锛屾潵婧?`69758f3`锛宍dirty=false`銆?
+- 杈圭晫锛氭湭鍦ㄧ湡瀹?DSH profile 鎵ц鏈€缁?`plugin add`锛屼篃鏈獙璇?DSH 閲嶅惎鍚庣殑 `uta_express`/绯荤粺鎻愮ず/瀹℃壒锛涙湅鍙嬬涓€娆＄偣鍑诲畨瑁呮墠鏄湡瀹為獙鏀躲€傚垎浜寘鏈鍚嶏紱MaiBot + QQ 绔埌绔€?h/7d銆佸灞?DPI 浠嶅緟楠屻€傛祴璇?profile 宸叉竻鐞嗭紝鐪熷疄 DSH 涓庢棩甯告暟鎹湭瑙︾銆傝瑙?[alpha.18 楠屾敹](../validation/share-package-0.2.0-alpha.18.md)銆備笅涓€姝ワ細璁╂湅鍙嬪畨瑁呭悗纭 DSH 宸ュ叿鍒楄〃鍜屾瀹犵姸鎬佽仈鍔紱濡傛灉 CLI 杈撳嚭寮傚父锛屽厛鐢?DSH 鑷甫 `plugin list` 鍜屽浠界洰褰曞畾浣嶃€?
+
+## 鏈€鏂帮細2026-10-26 alpha.17 鍒嗕韩鍖呬笌 Uta-MaiBot 閫傞厤鍣紙9a087a6锛?
+
+- 鐢ㄦ埛鏄庣‘瑕佹眰缁欏叾浠栦汉璇曠敤涓€浠藉寘鍚?DS 榧犳帶妯″瀷銆丠iyori 鍜?MaiBot 閫傞厤鍣ㄧ殑鐗堟湰锛涜繖鏄鈥滄棩甯歌凯浠ｄ笉鎵撳寘鈥濈害瀹氱殑鍗曟渚嬪銆備骇鐗?`app/release/Uta-0.2.0-alpha.17-win-x64.zip`锛孲HA-256 `f970d6311a489d87ddeebf9d49ccf8e8cb027eb731c57b5c3fcd55bbf77b6df4`锛屾潵婧?`9a087a6`锛宍dirty=false`锛涚増鏈?`0.2.0-alpha.17`銆傞€傞厤鍣?寮曞 `a7b9a77`锛屾墦鍖?鐗堟湰/璇存槑 `9a087a6`銆?
+- **閫傞厤鍣?*锛歚maibot-adapter/`锛屽叆鍙?`plugin.py`锛涘彧鐢?Python 鏍囧噯搴?+ `maibot_sdk`銆?524 鏈満 HTTP 鍏ュ彛鍚?`/health`銆乣/input/text`銆乣/input/screenshot`銆乣/sync/model`锛屾妸 Uta 娑堟伅浣滀负 `platform=uta / account=uta-desktop / scope=local` 鐨勭鑱婃敞鍏ャ€俙chat.receive.before_process` OBSERVE 涓婃姤 thinking锛沗@MessageGateway("duplex")` 鍙妸鍙戠粰璇ョ綉鍏崇殑鍥炲鎷嗘垚 鈮?80 瀛?v2 `rp_reply` 娴佸紡甯у啓鍥烇紝鍐嶅彂 completed銆傝繍琛屾椂绔偣浼樺厛 `%APPDATA%/uta/host-pets/maibot/runtime-endpoint.json`锛屽叾娆?stable 鏍圭鐐癸紝鍙敤 `[runtime] endpoint_file` 瑕嗙洊銆?
+- **缁戝畾缂哄彛**锛氬師棣栨寮曞涓嶅寘鍚?MaiBot锛宍SettingsTab` 鍙垏鍋忓ソ銆佷笉鍐?`pet-binding.json`锛屾墍浠ラ€傞厤鍣?v2 浜嬩欢浼氳 403銆傜幇宸叉妸 `maibot` 鍔犲叆 `OnboardingHostId` / `HOST_ORDER` / `host-onboarding.ts` 妫€娴嬶細鍗＄墖鈥滃吋瀹规帴鍏モ€濓紝寰芥爣鈥滈殢鍖呴€傞厤鍣?/ 闇€鏀惧叆 MaiBot鈥濓紝闃舵鈥滈殢鍖呮彁渚?瀹夎鎻掍欢/妗ユ帴宸ュ叿/杩愯鏃?缁戝畾/鍥炲０鈥濓紱閫変腑鍚庡畬鎴愬紩瀵间細璧?`switch-host` 鐪熸缁戝畾銆?
+- **鎵撳寘**锛歚UTA_SHARE_PACKAGE=1 UTA_DS_MODEL_DIR=<DS-control 鐩綍> npm run dist:zip`銆俙package-zip.mjs` 鍦?electron-vite build 鍚庢妸 DS 妯″瀷澶嶅埗鍒?`out/renderer/models/DS-control`锛屾牎楠?`c_0120.model3.json`銆乣MODEL-NOTICE.txt`銆侀€傞厤鍣ㄥ拰 Hiyori锛屽啀鎵撳寘锛涘垎浜ā寮忕敤 7z 浠?ZIP 鍒犻櫎 `Try-Uta.bat`锛屽洜涓哄€欓€?profile 涓嶅彂甯?host-pets 绔偣銆俙electron-builder.yml` 鐨?`extraResources` 甯﹁繃婊ゅ悗鐨勯€傞厤鍣紝`extraFiles` 甯?`README-FIRST.md` / `MAIBOT-ADAPTER.md` / `DS-MODEL-NOTICE.md`銆?
+- **楠岃瘉**锛氬簲鐢?932锛?27 閫氳繃銆? 璺宠繃銆? 澶辫触锛夛紝閫傞厤鍣?17/17锛堢湡瀹?SDK锛夛紝node/web 绫诲瀷涓庢瀯寤洪€氳繃銆傞殧绂荤敓浜у疄渚嬪畬鎴?`maibot` 缁戝畾鍚庯紝v2 thinking + 涓ゆ娴佸紡 rp_reply + completed + set_emotion 鍏ㄨ鎺ュ彈锛屾瀹犳皵娉℃樉绀哄畬鏁村彞瀛愶紱瑙ｅ帇鍚庣殑 `win-unpacked/Uta.exe` 鍦ㄥ叏鏂?profile 涓垪鍑?3 涓ā鍨嬪苟瀹為檯浠?asar 娓叉煋 DS-control锛沗resources/maibot-adapter` 鐢辩湡瀹?SDK 璇嗗埆涓?1 涓?HookHandler + 1 涓?duplex 缃戝叧銆傝瘉鎹?[share-package-0.2.0-alpha.17](../validation/share-package-0.2.0-alpha.17.md)銆?
+- **杈圭晫**锛氭病鏈夌湡瀹?MaiBot + QQ 绔埌绔紱`/input/text` 娉ㄥ叆鍙埌缁勪欢/妯℃嫙灞傘€傚寘鏈鍚嶏紝SmartScreen 棰勬湡銆傚垎浜寘蹇呴』璺戠ǔ瀹?`Uta.exe`锛堝€欓€夊惎鍔ㄥ櫒琚Щ闄わ級銆傛祴璇?profile `share-check`/`share-check2`/`share-verify` 宸插垹闄わ紝杩涚▼宸查€€鍑猴紱鏃ュ父 stable銆佹棩甯稿疄渚嬩笌 MaiBot 閰嶇疆鏈Е纰般€備笅涓€姝ワ細鎵句竴濂楁効鎰忔帴鍙楁彃浠剁殑 MaiBot 娴嬭瘯鐜锛岄獙璇?Uta 鏂囨湰娉ㄥ叆 鈫?Maisaka 鍥炲 鈫?姘旀场闂幆锛屽啀鍐冲畾鏄惁琛ユ儏缁?鍔ㄤ綔宸ュ叿銆?
+
+## 鏈€鏂帮細褰撳墠鐘舵€佷笌瀹屾垚搴﹂噸璇勶紙fa3daf0锛屽彧璇勪及锛?
+
+- 鐢ㄦ埛瑕佹眰鏌ョ湅鐩墠鐘舵€佸苟閲嶅啓璇勪及銆傚熀绾?`main/fa3daf0dc57ef51bfe11494ee5e1840dea053083`锛屽伐浣滃尯鍘熸湰骞插噣锛涜瑙?[鏈€鏂拌瘎浼癩(../ASSESSMENT-2026-10-26.md)銆備笂杞?5 椤瑰搴斾唬鐮佸拰姝ｅ紡鍥炲綊宸叉牳瀵归€氳繃锛屼繚鐣欑湡瀹炲弻 Electron/GUI绛夋湭楠屾敹杈圭晫锛涙棫瀹℃煡鎶ュ憡鍔犲巻鍙叉爣璁般€?
+- 鏂扮‘璁?**[P2: 鍗虫椂淇濆瓨鍗曞瓧娈靛け璐ヨ鍏朵粬瀛楁鎴愬姛鎺╃洊锛屽叧绐椾涪澶辨湭钀界洏璁剧疆]**锛歚use-settings-draft.ts` 鎴愬姛娓呴櫎鍏ㄥ眬閿欒锛屽け璐ュ瓧娈垫湭鍗曠嫭杩借釜锛?.8s 閲嶈瘯鍥犵姸鎬佸凡 success 琚烦杩囷紝`hasPending()` 杩斿洖 false锛沗use-settings-close.ts` 浜庢槸鐩存帴 close銆傜敓浜?composable 鎺㈤拡涓轰富棰樺け璐モ啋瑙嗙嚎瀛楁鎴愬姛鈫掓墽琛岄噸璇曗啋鍏抽棴锛岀粨鏋?draft dark/committed light銆佹棤鎻愮ず涓?close 鑾锋壒銆傚皻鏈慨澶嶃€?
+- 楠岃瘉锛氬簲鐢?**924锛?19 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?105/105锛宯ode/web 绫诲瀷銆佹瀯寤哄拰涓変唤濂戠害鍏ㄩ儴閫氳繃銆傛棩蹇椾笌 `autosave-probe.cjs/json` 浣嶄簬 `.tmp/assessment-20261026/`锛涚湡瀹?DS fixture 缂哄け銆傛病鏈夋妸鏃?GUI 璁板綍褰撴垚鏈疆鏂版墽琛屻€?
+- 鐜板満锛氱粺涓€寮€鍙?profile `dev-f7e444bba875`銆佷富 PID 12868銆乂ite 鐖惰繘绋?PID 29512锛涙樉寮忕鏈夌鐐?`/health` 姝ｅ父銆傞粯璁?MCP 鏌ヨ鏈繛鎺ヨ dev 瀹炰緥锛屼笉鎺ㄦ柇涓鸿繍琛屾湇鍔＄绾裤€傝缃獥鍙ｆ渶灏忓寲锛屾湰杞湭鎭㈠銆佺偣鍑绘垨鏀瑰彉鐢ㄦ埛绐楀彛銆傛湭鍙﹀惎鎴栧仠姝㈡瀹狅紱`npm run build` 浠呭埛鏂扮敓鎴愮洰褰曘€?
+- 宸ヤ綔鏂瑰紡锛氱户缁寜鐢ㄦ埛鍐冲畾浠?`npm run dev` 楠屾敹锛屼笉渚嬭鎵?ZIP锛涙寮忓彂琛屾椂鍐嶅仛鏈€缁堝寘楠岃瘉銆傛ā鍨嬭〃鐜板伐绋嬮潰鏉垮凡鎸夋柊鍐冲畾绉婚櫎锛屽簳灞?runtime 浠嶅湪锛屼笉鑳芥嵁姝ゆ妸宸插疄鐜版垚鏋滄竻闆躲€?
+- 涓嬩竴姝ヤ紭鍏堜慨鏂板彂鐜扮殑淇濆瓨缁勫悎澶辫触锛屽叾娆″畬鏁磋蛋閫氬伐鍧婄湡瀹炵紪杈戦摼璺紝鍐嶈ˉ鐪熷疄璇煶銆佸洓瀹夸富涓庨暱鏃?DPI銆傚綋鍓嶅畾浣嶄负鍔熻兘杈冨畬鏁淬€佷粛鍦ㄦ敹鍙ｇ殑 Alpha锛涗笟鍔′慨澶嶆湭鍦ㄦ湰杞疄鏂姐€?
+
+## 鏈€鏂帮細2026-10-26 鍗虫椂淇濆瓨缁勫悎澶辫触淇
+
+- 璇勪及 `ASSESSMENT-2026-10-26` 鐨?**[P2: 鍗虫椂淇濆瓨鐨勫崟瀛楁澶辫触琚叾浠栧瓧娈垫垚鍔熸帺鐩朷** 宸蹭慨澶嶏紝鎻愪氦 `ee805ab`銆?
+- `use-settings-draft` 澧炲姞閫愬瓧娈?`failedKeys`锛氭垚鍔熷彧娓呯悊鏈瀛楁锛涚姸鎬佺敱鍏ㄩ儴鏈惤鐩樺瓧娈垫帹瀵硷紱1800ms 閲嶈瘯璇诲彇澶辫触闆嗗悎鑰岄潪鍏ㄥ眬 `saveStatus`锛沗hasPending()` 绾冲叆澶辫触闆嗗悎涓?draft/baseline 宸紓銆?
+- `use-settings-close` 鍦ㄤ换涓€瀛楁澶辫触鏃舵彁绀猴紱鏃犲伐鍧?瀵嗛挜鑽夌鏃舵爣棰樹负鈥滃叧闂缃墠閲嶈瘯淇濆瓨锛熲€濓紝涓绘寜閽€滈噸璇曞苟鍏抽棴鈥濓紝閲嶈瘯鎴愬姛鍚庡叧闂€?
+- 楠岃瘉锛歚settings-window-draft.test.cjs` 鏂板缁勫悎澶辫触涓庡叧绐楅噸璇曚袱鏉＄湡瀹?SFC 娴嬭瘯锛涘弽杞瘎浼版帰閽堝緱鍒?`status=error / pending=true / 閲嶈瘯鍐嶅啓 themeMode / closePrompt=true / decisions=[]`銆傚簲鐢?**926锛?21 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛岀被鍨嬫鏌ヤ笌鏋勫缓閫氳繃銆?
+- 杈圭晫锛氭晠闅滀负鍙楁帶鎸佷箙鍖栨敞鍏ワ紝鏈湪鐪熷疄鐢ㄦ埛鐩綍鍒堕€犵鐩樺け璐ワ紱鐪熷疄鍏崇獥/鎭㈠涓庨暱鏃堕獙璇佷粛寰呰ˉ銆?
+
+## 鏈€鏂帮細2026-10-26 璁剧疆鏀逛负鍗虫敼鍗冲瓨
+
+- 鐢ㄦ埛瑕佹眰鍘绘帀璁剧疆椤碘€滀繚瀛樻洿鏀?鏀惧純鏇存敼鈥濈‘璁ゃ€傚叕鍏?12 椤瑰亸濂芥敼涓哄嵆鏃跺啓鍏ワ細`use-settings-draft.ts` 閲嶅啓涓烘寜瀛楁涓茶鎻愪氦锛屼繚鐣欏啓鍏ユ湡闂寸殑鏂拌緭鍏ワ紱绂绘暎鎺т欢绔嬪嵆鍐欙紝寮鸿皟鑹?璇€?闊抽噺 160鈥?20ms 闃叉姈锛況evision 鍐茬獊鑷姩鍒锋柊閲嶈瘯鏈€澶?3 娆★紝澶辫触淇濈暀鏈湴鍊煎苟姣?1.8s 閲嶈瘯涓€娆★紝鐘舵€佹爮鍙墜鍔ㄩ噸璇曘€?
+- `use-settings-close.ts` 鍙湪璇煶瀵嗛挜/棰勮宸ュ潑鑽夌鏈繚瀛樻垨鍋忓ソ鍐欏叆澶辫触鏃舵彁绀猴紱鍏崇獥鍏?`flushPending()` 绛夊緟鍦ㄩ€斿啓鍏ワ紱鈥滀繚瀛樿崏绋垮苟鍏抽棴鈥濆彧淇濆瓨鐧昏鐨勮崏绋裤€?
+- `SettingsWindowApp.vue` 绉婚櫎淇濆瓨/鏀惧純鎸夐挳銆佹湭淇濆瓨鏍囪涓庡啿绐佹í骞咃紝鏂板鈥滄敼鍔ㄤ細鑷姩淇濆瓨鍒版湰鏈衡€濆拰鑷姩淇濆瓨鐘舵€侊紱`AboutDomain` 鏄剧ず淇濆瓨鏂瑰紡锛宍VoiceDomain` 鏇存柊淇濆瓨瑙勫垯鏂囨銆?
+- 楠岃瘉锛氬簲鐢?**922锛?17 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛岀被鍨嬫鏌ヤ笌鏋勫缓閫氳繃锛涚湡瀹?dev 绐楀彛楠岃瘉鏃?澶溿€佸己璋冭壊銆佽绾垮紑鍏冲嵆鏃惰惤鐩樺苟鍚屾蹇嵎闈㈡澘锛屽叧绐椾笉鍐嶆彁绀猴紱璁板綍瑙?[settings-live-save-2026-10-26](../validation/settings-live-save-2026-10-26.md)銆傛湭鎵撳寘锛屾棩甯稿疄渚嬫湭瑙︾銆?
+- 娴嬭瘯璋冩暣锛歚settings-window-draft.test.cjs` 鏀逛负鍗虫椂鍐欏叆銆侀槻鎶栥€佸啿绐侀噸璇曘€佸け璐ラ噸璇曘€佽崏绋垮叧绐楋紱`unsaved-drafts.test.cjs` 鐨勫叧闂畧鍗亣 draft 鏀圭敤 `hasPending/flushPending/retryNow`銆?
+- 杈圭晫锛氬啿绐侀噸璇曚负缁勪欢绾ф祴璇曪紝鏈仛涓や釜鐪熷疄 Electron 绐楀彛鍚屾椂鏀瑰悓涓€瀛楁鐨?GUI 绔炰簤锛涚湡瀹?TTS/楹﹀厠椋庛€侀暱鏃躲€丏PI 鏈獙鏀躲€?
+
+## 鏈€鏂帮細2026-10-26 瀹℃煡淇锛堟簮鐮侊紝涓嶆墦鍖咃級
+
+- 鍩虹嚎 `main/79d8d64` 鐨?5 椤瑰鏌ラ棶棰樺凡淇锛涚敤鎴疯姹傚悗缁洿鎺ュ湪 `app` 涓?`npm run dev` 楠屾敹锛屾湰杞病鏈夌敓鎴愭柊 ZIP銆佹病鏈夋浛鎹㈡棩甯哥増鏈€?
+- **[P1: 鍚屽钩鍙板瀹炰緥瑕嗙洊瀹夸富绔偣]**锛歚main/host-endpoint.ts` 鍙湪 stable 鎴栨樉寮?`UTA_BOUND_HOST` 鐨?Pets profile 鍙戝竷鍏变韩 host-pets 绔偣锛涘紑鍙?鍊欓€?profile 榛樿鍏抽棴鍏变韩鍙戠幇銆俙runtime-bridge` 鍐欏叆鍏变韩绔偣鍓嶆鏌ュ瓨娲?PID/浠ょ墝骞剁敤鐭椂 claim 閿侊紝宸叉湁瀛樻椿瀹炰緥鏃朵笉瑕嗙洊锛涘叧闂椂鍙垹闄?token 灞炰簬鑷繁鐨勬枃浠躲€傚洖褰?`host-endpoint.test.cjs` + `runtime-bridge.test.cjs` 瑕嗙洊鍙岀湡瀹炲洖鐜?bridge銆?
+- **[P2: 鍒囬璁句涪澶卞伐鍧婅崏绋縘**锛歚applyStatePreset`銆乣togglePinPreset`銆乣startNewPreset` 缁熶竴璧颁繚瀛?鏀惧純/缁х画缂栬緫闂ㄦ帶锛涘悓棰勮閲嶆挱涓嶉噸杞界紪杈戝櫒锛岃崏绋夸笌鎾ら攢鍘嗗彶淇濈暀銆俙workshop-draft-guard.test.cjs` 鐢ㄧ湡瀹?SFC setup 瑕嗙洊淇濆瓨銆佹斁寮冦€佺户缁€佹柊寤恒€侀拤浣忓拰鍚岄璁鹃噸鎾紱鐪熷疄璁剧疆绐楀彛 760px 楠岃瘉寮圭獥銆?
+- **[P2: 宸ュ潑涓瓑瀹藉害瑁佸垏]**锛氬伐鍧婁互 `studio-workbench-shell` 鐨?`container-type: inline-size` 鎸夊簳鏉垮疄闄呭搴﹀湪 660px 浠ヤ笅鍒囧崟鍒楋紝鎿嶄綔鎸夐挳琛屽厑璁告崲琛屻€傜湡瀹炶缃獥鍙?960/880/760 鍧囧崟鍒楁棤妯悜瑁佸垏銆?
+- **[P2: 蹇嵎鍔ㄤ綔鐗囨鏈敓鎴愬姩浣淽**锛氭柊澧?`services/preset-snippets.ts`锛岀湪鐪?鐐瑰ご/姝ご/鎯婅鐢熸垚涓ゅ抚鍙傛暟鍏抽敭甯у苟鎸夋ā鍨嬭兘鍔涚鐢紱鐪熷疄绐楀彛鐐瑰嚮鈥? 鐪ㄧ溂鈥濈敓鎴?`鐪ㄧ溂路闂璥/`鐪ㄧ溂路鐫乣 涓ゆ銆?
+- **[P2: 寮鸿皟鑹叉枃瀛楀姣斿害鍥為€€]**锛氭仮澶嶆寜瀹為檯鐧?娣卞ⅷ瀵规瘮搴﹂€夋嫨锛屽叏閮ㄥ唴缃壊姝ｅ父/hover 鍧囨柇瑷€ 鈮?.5:1銆?
+- 楠岃瘉锛氬簲鐢?**927锛?22 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**105/105**锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏋勫缓閫氳繃锛涗慨澶嶈褰曡 [review-fixes-2026-10-26](../validation/review-fixes-2026-10-26.md)銆傚紑鍙戝疄渚嬮獙璇佸悗宸插仠姝紱鏃ュ父 0.1.1/stable 涓庣敤鎴锋鍦ㄨ繍琛岀殑 alpha.14 鏈浛鎹€佹湭鍋滄銆?
+- 鏈獙鏀讹細涓や釜鐪熷疄 Electron 瀹炰緥鐨勫叡浜鐐?GUI 绔炰簤銆佸啿绐佺殑璁剧疆椤靛窘鏍囥€佺湡瀹炲涓婚噸杩炪€佺湡瀹炶闊炽€? 灏忔椂/7 澶┿€佸灞?DPI銆傛病鏈夐噸鏂版墦鍖咃紝鍥犳涓嶅瓨鍦ㄦ湰杞柊 ZIP锛沘lpha.16 ZIP 浠嶅彧浠ｈ〃 `2b54665`銆?
+
+## 2026-10-26 瀹℃煡涓庡畬鎴愬害璇勪及锛堜慨澶嶅墠鍩虹嚎锛?
+
+- 瀹℃煡鍩虹嚎 `main/79d8d6418e087007c51d69d3739aea3a14781bc3`锛岃捣濮嬪伐浣滃尯骞插噣銆佹病鏈?Uta/Electron 杩涚▼銆傛槰澶?81 涓彁浜ゆ寜椋庨櫓闈㈡牳鏌ワ紝瀹屾暣缁撹瑙?[瀹℃煡鎶ュ憡](../REVIEW-2026-10-26.md)銆?
+- 纭 **[P1: 鍚屽钩鍙板瀹炰緥瑕嗙洊瀹夸富绔偣]**銆?*[P2: 鍒囬璁句涪澶卞伐鍧婅崏绋垮強鎾ら攢鍘嗗彶]**銆?*[P2: 宸ュ潑涓瓑瀹藉害瑁佸垏]**銆?*[P2: 甯哥敤鍔ㄤ綔鐗囨鏈敓鎴愬姩浣淽**銆?*[P2: 寮鸿皟鑹叉枃瀛楀姣斿害鍥為€€]**銆傚悇鏈夌敓浜фā鍧?缁勪欢鎴栫湡瀹?Electron 娓叉煋鎺㈤拡锛涘垏棰勮闂鏃╀簬鏄ㄥぉ锛屼笉褰撲綔鏂扮晫闈㈠紩鍏ョ殑鍥炲綊銆?
+- 楠岃瘉锛氬簲鐢?913锛?08 閫氳繃銆? 璺宠繃銆? 澶辫触锛夛紝鎻掍欢 105/105锛宯ode/web 绫诲瀷銆佹瀯寤哄強涓変唤濂戠害閫氳繃锛涙湰杞湡瀹?DS fixture 缂哄け銆傚師鐢?Computer Use 涓ゆ婵€娲诲け璐ワ紝鍋滄璇ヨ矾绾匡紱鍚庣画鍙仛鐙珛 Electron API/鍚堟垚 DOM 甯冨眬瀹為獙锛屼笉褰撲綔鍘熺敓鐐瑰嚮楠屾敹銆?
+- 浜х墿宸窛锛歛lpha.16 ZIP hash 涓?manifest 涓€鑷达紝浣嗘潵婧愪负 `2b54665`锛屼笉鍚悗缁?9 涓簮鐮佺晫闈㈡彁浜ゃ€俙npm run build` 鍒锋柊 `app/out`锛屾病鏈夐噸鏂版墦 ZIP銆佹浛鎹㈡棩甯稿惎鍔ㄦ垨瀹夎鎻掍欢銆?
+- 鏈満璇佹嵁锛歚.tmp/review-20261026/` 鐨?`component-probes.cjs/json`銆乣endpoint-probe.cjs/json`銆乣observe-electron.cjs`銆乣layout-probe.json`銆乣settings-observation.json` 鍙婂洓浠芥祴璇?鏋勫缓鏃ュ織銆傚鐜版柇瑷€褰撳墠缂洪櫡瀛樺湪锛屼慨澶嶅悗瑕佸弽杞鏈熷苟绾冲叆姝ｅ紡娴嬭瘯銆?
+- 鐜板満锛歱rofile `review-20261026`銆乣review-observe-20261026`銆乣review-settings-20261026`銆乣review-layout-20261026` 鍏ㄩ儴浣跨敤鏈疆绉佹湁 userData/runtime銆丆ODEX_HOME/DSH_HOME锛屼繚鎸佺湡瀹炲涓绘湭缁戝畾銆傝嚜寤?PID 2740/27004/2016 鎸夋帰閽堥€€鍑洪€昏緫缁撴潫锛?2016 鏍稿韬唤鍚庡仠姝紱绔偣宸叉竻鐞嗭紝鏀跺熬娌℃湁閬楃暀 Uta/Electron 鎴栨祴璇曠洃鍚€傛病鏈夌敤鎴锋棩甯稿疄渚嬭鎿嶄綔銆?
+- 璇ヨ疆鍙鏌ワ紱涓婅堪 5 椤归殢鍚庡凡鍦ㄦ簮鐮佷慨澶嶏紝瑙侀《閮ㄨ褰曘€備粛鏈ˉ鐪熷疄璇煶銆佸洓瀹夸富銆侀暱鏃?DPI銆佸崌绾?鍥炴粴楠屾敹锛涘綋鍓嶄负鍙綋楠?Alpha锛屼笉鑳芥爣浣?1.0 宸插畬鎴愩€?
+
+## 鏈€鏂帮細alpha.16 娑堟伅 Markdown 娓叉煋鍊欓€夛紙2026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛涘姛鑳芥彁浜?`56ee39e`锛堟秷鎭崲琛屼繚鐣?+ token Markdown 娓叉煋锛夛紝鍙戝竷鍑嗗 `2b54665`锛涚増鏈?`0.2.0-alpha.16`銆?
+- **鍗忎綔鏂瑰紡鏇存柊锛?026-10-25锛?*锛氱敤鎴疯姹傚悗缁棩甯歌凯浠ｄ笉鍐嶆墦鍖?ZIP/鍊欓€夊寘锛岄獙鏀剁洿鎺ュ湪 `D:/Frankenstein/Uta/app` 涓嬭繍琛?`npm run dev`銆傚彧鏈夋槑纭姹傚彂鐗堟垨娴嬭瘯鍖呮椂鎵嶆墦鍖咃紱涓嶈鍋滄鎴栨浛鎹㈢敤鎴锋鍦ㄨ繍琛岀殑鎵撳寘瀹炰緥銆?
+- 鍊欓€?ZIP锛歚app/release/Uta-0.2.0-alpha.16-win-x64.zip`锛孲HA-256 `666f601bafd75f7a4a5a5bb3a90e801d3f72369c37f447ac9b689893e3f1c1f7`锛屾潵婧?`2b5466579c3d1793d6641093275b1a4ca21e3305`锛宍dirty=false`锛屾瀯寤?`2026-10-25T09:44:29.904Z`锛沗Try-Uta.bat` 浣跨敤 `%LOCALAPPDATA%\Uta-Candidates\0.2.0-alpha.16`銆乸rofile `candidate-020-alpha16`銆?
+- **鏍瑰洜**锛歚sanitizeText` 鎶婃墍鏈夋崲琛屽帇鎴愮┖鏍硷紱鍔犵矖/鏂滀綋鏄鍐呮牸寮忎粛鍙В鏋愶紝鍒楄〃/浠ｇ爜鍧?鏍囬娌℃湁鎹㈣灏辨棤娉曞缓鍧椼€傛柊澧?`sanitizeMessageText` 鐢ㄤ簬 `notify`/`choice_hint`/`rp_reply`锛屼繚鐣欐崲琛屽拰鍒楄〃缂╄繘銆佹竻鎺у埗瀛楃銆侀檺闀匡紱鏍囩浠嶅崟琛屻€?
+- **娓叉煋**锛歚renderer/services/markdown.ts` 杈撳嚭 token锛坆old/italic/strike/code/link銆乸aragraph/heading/code/list/quote/rule锛夛紝`MarkdownText.vue` + `MarkdownSegments.vue` 鐢?Vue 妯℃澘娓叉煋锛屾棤 `v-html`銆傛敮鎸?`**`/`__`銆乣*`/`_`銆乣~~`銆佸弽寮曞彿銆乫enced code銆佸垪琛ㄣ€佹爣棰樸€佸紩鐢ㄣ€佸垎闅旂嚎銆乭ttp(s) 閾炬帴銆傛诞鍔ㄦ皵娉″拰娑堟伅璁板綍鍏辩敤锛涙秷鎭褰曢摼鎺ュ彲鐐瑰嚮锛屾皵娉￠摼鎺ヤ粎鏍峰紡銆?
+- 楠岃瘉锛氬簲鐢?**913锛?08 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**105/105**锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏋勫缓閫氳繃锛涘紑鍙戜笌鎵撳寘瀹炰緥閮藉彂閫佷簡鍖呭惈鍔犵矖銆佹枩浣撱€佸垪琛ㄥ拰浠ｇ爜鍧楃殑娑堟伅锛屾覆鏌撴纭€傛墦鍖呭疄渚嬩娇鐢?zcode 娴嬭瘯缁戝畾锛岄獙璇佸悗宸插垹闄ゅ€欓€夋暟鎹€乣host-pets/zcode` 涓庡紑鍙戠粦瀹氥€?
+- 鏈獙鏀讹細Markdown 琛ㄦ牸鎺掔増銆佸畬鏁?CommonMark 宓屽銆佺湡瀹?Qoder 鎻掍欢鏇存柊鍚庣殑琛屼负銆侀攣瀹氱┛閫忋€佺湡瀹炲涓诲垏鎹㈤噸杩炪€佺湡瀹?DSH/楹﹀厠椋?浜戠 TTS銆? 灏忔椂/7 澶┿€佸灞?DPI銆傛棩甯?0.1.1/stable 涓庣敤鎴锋鍦ㄨ繍琛岀殑 alpha.14 鏈浛鎹€佹湭鍋滄銆?
+
+## 鏈€鏂帮細alpha.15 蹇嵎闈㈡澘鍙屽嚮涓庢ā鍨嬪崱鐗囦慨澶嶅€欓€夛紙2026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛涗慨澶嶆彁浜?`e625184`锛堥潰鏉垮弻鍑汇€佹ā鍨嬪崱鐗囥€佹皵娉″仠鐣欙級锛屽彂甯冨噯澶?`ad27385`锛涚増鏈?`0.2.0-alpha.15`銆?
+- 鍊欓€?ZIP锛歚app/release/Uta-0.2.0-alpha.15-win-x64.zip`锛孲HA-256 `805ddbc121cfb8454f5efb1725f42ae327e07dde5c50af809ca939cf7409e6e2`锛屾潵婧?`ad27385cdf05c2fc9ade7093d48d21dab6ce8cc8`锛宍dirty=false`锛屾瀯寤?`2026-10-25T09:33:45.692Z`锛沗Try-Uta.bat` 浣跨敤 `%LOCALAPPDATA%\Uta-Candidates\0.2.0-alpha.15`銆乸rofile `candidate-020-alpha15`銆?
+- **鍙屽嚮鍏抽棴鏍瑰洜**锛氬揩鎹烽潰鏉垮彧闃绘浜?`click`锛屾病鏈夐樆姝?`dblclick`锛涘弻鍑诲啋娉″埌鑸炲彴鏍?`onDoubleClick` 鍚庡叧闂潰鏉裤€傜幇鍦?`.quick-settings`銆乣.quick-input`銆乣.companion-window` 閮?`@dblclick.stop`锛宍onDoubleClick(event)` 鍐嶆寜鐩爣闈㈡澘鍏滃簳銆?
+- **妯″瀷鍗＄墖**锛歚aria-label="妯″瀷"` 鐨?`.qs-model-block` 鐙珛鍗＄墖锛屾樉绀衡€滄ā鍨嬧€濆拰褰撳墠妯″瀷鍚嶏紱鐐瑰崱鐗囧睍寮€鍘熸ā鍨嬪垪琛紱鏍囬鏍忎粎鈥滃揩鎹疯缃€?鍏抽棴锛屼笅闈㈡湁鍒嗛殧绾裤€?
+- **姘旀场鍋滅暀**锛歚estimateBubbleTtl` 鏈€鐭?5000ms銆佹渶闀?16000ms锛涙秷鎭褰曚粛淇濈暀鍏ㄩ儴鏂囨湰銆?
+- **Qoder 杈撳嚭璇婃柇**锛氬綋鍓嶇敤鎴疯繍琛岀殑 alpha.14 stable 宸茬粦瀹?Qoder锛宍/context` 鏄剧ず `qoder:069c2355...`锛宧ooks 姝ｅ父鍐欏叆銆傚彂閫?rp_reply 浼氱珛鍗冲嚭鐜版皵娉★紱閫氳繃宸插畨瑁?Qoder Stop hook 鍙戦€佺殑鏈€缁堝洖澶嶈繘鍏ユ秷鎭褰曘€備箣鍓嶇湅涓嶅埌涓昏鏄皵娉＄煭 + 鏂板疄渚嬭繕娌″畬鎴愪竴娆?Stop锛涗笉鏄涓绘柇寮€銆傛湭鑷姩杞彂鍔╂墜姝ｆ枃锛屽伐浣滄湡闂翠富鍔ㄥ彂瑷€浠嶄緷璧?`deskpet_notify`銆?
+- 楠岃瘉锛氬簲鐢?**907锛?02 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**105/105**锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏋勫缓閫氳繃锛涘紑鍙戜笌鎵撳寘瀹炰緥閮介獙璇佷簡妯″瀷鍗＄墖鍜岄潰鏉垮唴鍙屽嚮淇濇寔鎵撳紑銆傝瘖鏂椂鍚戝綋鍓嶇ǔ瀹氬疄渚嬪彂杩?4 鏉℃祴璇曞洖澶嶏紝浠呭湪鍐呭瓨娑堟伅璁板綍锛岄噸鍚竻绌恒€?
+- 鏈獙鏀讹細Qoder 鍔╂墜姝ｆ枃鑷姩杞彂銆佺湡瀹?Qoder 鎻掍欢鏇存柊鍚庣殑琛屼负銆侀攣瀹氱┛閫忕湡瀹炵偣鍑汇€佺湡瀹炲涓诲垏鎹㈤噸杩炪€佺湡瀹?DSH/楹﹀厠椋?浜戠 TTS銆? 灏忔椂/7 澶┿€佸灞?DPI銆佹仮澶嶉〉鏍囬鏍忋€佽创闈犲浘鏍囧悓姝ャ€傛棩甯?0.1.1/stable 涓庣敤鎴锋鍦ㄨ繍琛岀殑 alpha.14 鏈浛鎹€佹湭鍋滄銆傚綋鍓嶅畨瑁呯殑 Qoder 鎻掍欢缂撳瓨涓?0.1.9锛屾湭鏀瑰啓鐢ㄦ埛鏃ュ父瀹夸富閰嶇疆銆?
+
+## 鏈€鏂帮細alpha.14 蹇嵎闈㈡澘瀹夸富鍒囨崲涓庢ā鍨嬪尯鏀圭増鍊欓€夛紙2026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛涘姛鑳芥彁浜?`6da2248`锛堝揩璁惧涓诲垏鎹€佹ā鍨嬪尯绉诲叆姝ｆ枃銆佽法绐楀彛缁戝畾鍚屾锛夛紝鍙戝竷鍑嗗 `8004397`锛堢増鏈€丗IRST-READ銆乀ry-Uta profile銆佹瀯寤洪厤缃級锛涚増鏈?`0.2.0-alpha.14`銆?
+- 鍊欓€?ZIP锛歚app/release/Uta-0.2.0-alpha.14-win-x64.zip`锛孲HA-256 `fad4d1216dc33f638e4753e95b42784c5bf9bbe4751b8b9bf625190fe2f4939b`锛屾潵婧?`80043970451883a51f151f5da3cc8d564430cfb4`锛宍dirty=false`锛屾瀯寤?`2026-10-25T09:18:11.952Z`锛涜В鍘嬬洰褰?`app/release/Uta-0.2.0-alpha.14-win-x64`锛宍Try-Uta.bat` 浣跨敤 `%LOCALAPPDATA%\Uta-Candidates\0.2.0-alpha.14`銆乸rofile `candidate-020-alpha14`銆?
+- **瀹夸富鍒囨崲**锛歚createPetBindingStore` 鏂板 `rebind(hostId)`锛屼繚鐣?`bind()` 鐨勨€滃凡缁戝畾鎷掔粷绗簩骞冲彴鈥濊涔夛紱涓昏繘绋嬫柊澧?`pet-switch-host`锛坱rusted UI sender锛夛紝鏇存柊 `boundHostId` 鍜?`setExtraEndpointFile`锛屽垹闄ゆ棫骞冲彴绔偣骞跺彂甯冩柊绔偣锛沺reload 鏆撮湶 `switchPetHost`銆傜粦瀹氬彉鍖栧悗涓昏繘绋嬪悜鎵€鏈夌獥鍙ｅ箍鎾?`pet-binding-changed`锛孲ettingsWindowApp / ConnectionsDomain 璁㈤槄骞舵洿鏂般€?
+- **蹇嵎闈㈡澘**锛氬ご閮ㄥ彧鍓┾€滃揩鎹疯缃€?鍏抽棴骞跺姞 `border-bottom` 鍒嗛殧绾匡紱鈥滆鑹测€濆垎缁勫湪姝ｆ枃绗竴浣嶏紝鍙充晶鍔犵矖鏄剧ず褰撳墠妯″瀷锛屽睍寮€鍚庢槸鍘熸潵鐨勫睍绀烘柟寮?妯″瀷鍒楄〃锛涒€滃涓烩€濆垎缁勫湪鈥滈儴浠垛€濅箣鍚庯紝鍒楀嚭 7 涓?agent 骞冲彴锛岄€夋嫨鍚庡唴鑱旂‘璁も€滃垏鎹㈠苟閲嶈浇鈥濓紝鎴愬姛鍚庤皟鐢?`reloadWindow`銆傝В闄ょ粦瀹氫粛鍦?About锛屽涓诲垪琛ㄤ笉鍚?standalone/澶栭儴 HTTP銆?
+- 鐪熷疄绐楀彛锛氬紑鍙戝疄渚嬩粠鐙珛寰呮満鍒囧埌 ZCode 鈫?OpenCode 鈫?ZCode锛沗pet-binding.json` 渚濇鏇存柊锛屾棫骞冲彴 `host-pets/<host>/runtime-endpoint.json` 琚垹闄わ紝妗屽疇閲嶈浇鍚庝粛淇濇寔 DS 妯″瀷锛涜缃獥鍙ｅ仠鍦ㄨ繛鎺ラ〉鏃讹紝OpenCode 鈫?ZCode 浼氬嵆鏃舵洿鏂般€傛墦鍖?alpha.14 瀹炰緥涔熸樉绀哄悓涓€濂楁柊闈㈡澘銆傞獙璇佸悗寮€鍙戠粦瀹氥€乑Code/OpenCode 绔偣鍧囧垹闄わ紝寮€鍙戜笌 smoke 瀹炰緥宸查€€鍑猴紝smoke 鏁版嵁宸插垹闄ゃ€?
+- 楠岃瘉锛氬簲鐢?**907锛?02 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**105/105**锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏋勫缓閫氳繃銆傛柊澧炲洖褰掕鐩?`rebind`銆佸垏鎹?IPC/骞挎挱鎺ョ嚎銆侀潰鏉垮垎缁勪笌鏍囬鍒嗛殧绾裤€?
+- 鏈獙鏀讹細娌℃湁鍒囧埌鏈満姝ｅ湪杩愯鐨?Qoder/Codex/Antigravity/Harness锛岄伩鍏嶇湡瀹炴彃浠舵帴鍒伴殧绂诲疄渚嬶紱鐪熷疄鎻掍欢閲嶈繛銆佺湡瀹炲涓讳細璇濄€佺湡瀹為害鍏嬮/浜戠 TTS銆? 灏忔椂/7 澶┿€佸灞?DPI銆佹仮澶嶉〉鏍囬鏍忋€佽创闈犲浘鏍囧悓姝ヤ粛鏈獙鏀躲€傛棩甯?0.1.1/stable 涓庢鍦ㄨ繍琛岀殑 alpha.12 鏈浛鎹€佹湭鏀瑰姩銆?
+
+## 鏈€鏂帮細alpha.13 宸ヤ綔鐘舵€併€佸揩鎹烽潰鏉夸笌閮ㄤ欢淇濇寔鍊欓€夛紙2026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛涘姛鑳芥彁浜?`6989b22`锛堝伐浣滆瑙夈€佸乏鍙抽敭鍚堝苟銆佸揩鎹烽潰鏉裤€佹ā寮忔ā鍨嬭蹇嗐€侀儴浠朵繚鎸侊級銆佸彂甯冨噯澶?`8382a0b`锛堢増鏈€丗IRST-READ銆乀ry-Uta profile銆佹瀯寤洪厤缃級銆乣4d58f56`锛堝彂閫佹秷鎭悗閲嶆柊钀藉湴鎺т欢灞傦紝淇濇寔閮ㄤ欢涓嶆秷澶憋級锛涚増鏈?`0.2.0-alpha.13`銆?
+- 鍊欓€?ZIP锛歚app/release/Uta-0.2.0-alpha.13-win-x64.zip`锛孲HA-256 `57d3a56b074ff875ce30e988ea977c958607c0d925398c5894374d1ae686e27f`锛屾潵婧?`4d58f56eded3`锛宍dirty=false`锛屾瀯寤?`2026-10-25T08:48:55.058Z`锛涜В鍘嬬洰褰?`app/release/Uta-0.2.0-alpha.13-win-x64`锛宍Try-Uta.bat` 浣跨敤 `%LOCALAPPDATA%\Uta-Candidates\0.2.0-alpha.13`銆乸rofile `candidate-020-alpha13`銆?
+- 琛屼负锛氬涓?hook 娌℃湁杈撳叆妗嗙劍鐐逛簨浠讹紝鎸夌敤鎴峰喅瀹氬彇娑堝涓昏緭鍏ユ鐩戝惉锛涙€濊€?宸ュ叿鐘舵€佷緷娆″皾璇?`鑱嗗惉璁板綍 鈫?鑱嗗惉 鈫?宸ヤ綔 鈫?鎬濊€?涓撴敞/濂藉`锛屽懡涓惊鐜悗鐢?`workingVisualOwns` 鐙崰锛屽伐浣滆В璇村拰宸ュ叿鍒囨崲涓嶆姠瑙嗚銆傛瀹犺嚜宸辩殑杈撳叆妗嗕篃涓嶈Е鍙戣亞鍚€?
+- 鐐瑰嚮锛歚onStageClick` 涓?`onStageRightClick` 鍏辩敤 `cycleEmotion()`锛涘崟鍑诲欢杩?220ms锛屽弻鍑诲湪 `onDoubleClick` 娓呭畾鏃跺櫒骞舵墦寮€杈撳叆妗嗭紱鏃цЕ鎽稿尯鍩熷懡涓€乣hitTestModel`銆乣performTouchReaction` 涓庘€滄埑涓€鎴斥€濆彴璇嶅凡鍒犻櫎銆傝緭鍏ユ鍗犱綅鍙墿鈥滆緭鍏ユ秷鎭€︹€濄€?
+- 蹇嵎闈㈡澘锛氳鑹插悕灞曞紑妯″瀷鎶藉眽锛涗富棰樿壊鍙湪瀹屾暣璁剧疆锛涙闈㈢粍鏂板 `setClickThroughLocked` 閿佸畾绌块€忥紱閮ㄤ欢鍖烘寜 `outfit/hair/pose_prop/face_effect/toggle/other` 鍒嗙粍锛岃皟鐢?`store.toggleHeldControl`銆俙held` 鏍囪鍦?`applyControlActionToList` 鐨?`reset_transient`/`set` 涓繚鐣欙紝瀹屾暣 `reset` 娓呴櫎锛涢璁炬楠ゆ妸淇濇寔椤规渶鍚庤惤鍦帮紝浜掓枼鏃剁敤鎴蜂繚鎸佷紭鍏堛€傚彂閫佹秷鎭竻鍦烘櫙鍙傛暟鍚庝細璋冪敤 `syncControlsToModelAndHost(240)` 閲嶆柊钀藉湴鎺т欢灞傦紝淇濇寔閮ㄤ欢涓嶄細鍦ㄥ彂閫佸悗娑堝け銆?
+- 妯″紡璁板繂锛歚deskpet/model-by-kind` 璁板綍姣忕 kind 鏈€鍚?URL锛沗setStoredModelPath` 涓?`discoverModel` 閮戒細鍐欏叆锛涘揩鎹烽潰鏉裤€佸畬鏁磋缃鑹查〉銆佹棫 SettingsPanel 鐨?`setDisplayMode` 閮戒細鍏堟煡璁板繂鍐嶅洖閫€绗竴椤广€?
+- 楠岃瘉锛氬簲鐢?**903锛?98 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**105/105**锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏋勫缓閫氳繃銆傜湡瀹炲紑鍙戝疄渚?`dev-f7e444bba875` 鐢ㄩ殧绂荤殑鍚堟垚缁戝畾鍜屾湰鏈?v2 浜嬩欢楠岃瘉浜嗏€滄€濊€冧腑鈥濊兌鍥娿€佽缃〉鈥滄鍦ㄨ〃鐜帮細宸ヤ綔路杩炵画鈥濄€佸畬鎴愬悗鍥炲緟鏈猴紱楠岃瘉浜嗗崟鍑讳笉寮€杈撳叆妗嗐€佸彸閿垏琛ㄦ儏銆佸弻鍑诲紑杈撳叆妗嗐€佽泲鍖呴キ閮ㄤ欢鈥滀繚鎸佲€濊法澶氭鎿嶄綔涓嶆秷澶便€丏S 鈫?`sample_static` 鍙屽悜璁板繂銆佸揩鎹烽潰鏉挎姌鍙犲竷灞€銆傛墦鍖?`Try-Uta.bat` 瀹炰緥姝ｅ父鍔犺浇 Hiyori 骞舵樉绀哄悓涓€濂楁柊闈㈡澘銆傝瘉鎹 [鍊欓€夐獙鏀惰褰昡(../validation/candidate-0.2.0-alpha.13.md)銆?
+- 鏈獙鏀?杈圭晫锛氶攣瀹氱┛閫忔寜閽病鏈夊湪鐪熷疄绐楀彛鐐瑰嚮锛堟湰鏈哄悓鏃舵湁鏃ュ父 alpha.12锛屽叡浜叏灞€蹇嵎閿級锛屽彧鍋氫簡浠ｇ爜鍜屾簮鐮佹祴璇曪紱鐪熷疄 Codex/Qoder/DSH 宸ヤ綔浜嬩欢銆佺湡瀹炲涓昏緭鍏ユ鐒︾偣锛堝涓讳笉鎻愪緵锛夈€佺湡瀹為害鍏嬮/浜戠 TTS銆? 灏忔椂/7 澶┿€佸灞?DPI銆佹仮澶嶉〉鏍囬鏍忋€佽创闈犲浘鏍囧悓姝ヤ粛鏈獙鏀躲€?
+- 鐜板満锛氬紑鍙戝疄渚嬩笌鎵撳寘 smoke 瀹炰緥鍧囧凡鍋滄锛涘紑鍙戝疄渚嬬殑鍚堟垚 `pet-binding.json` 宸插垹闄わ紝`win-unpacked` 鍐?smoke 涓存椂杈撳嚭宸叉竻鐞嗭紱smoke 鐢熸垚鐨?`%LOCALAPPDATA%\Uta-Candidates\0.2.0-alpha.13` 宸插垹闄わ紝鐢ㄦ埛棣栨鍙屽嚮 `Try-Uta.bat` 浼氫粠骞插噣寮曞寮€濮嬨€傛棩甯?`uta` 鏁版嵁涓庢鍦ㄨ繍琛岀殑 alpha.12 瀹炰緥鏈Е纰帮紱鏃ュ父 0.1.1/stable 鏈浛鎹€?
+
+## 鏈€鏂帮細alpha.12 鍗曞钩鍙扮粦瀹氫笌澶氭瀹犲€欓€夛紙2026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛屼唬鐮佹彁浜?`bfa5d6c`锛堝崟骞冲彴缁戝畾銆佸钩鍙板唴浼氳瘽鍏辩敤銆佸涓荤鐐广€丳ets 鍚姩鍣ㄣ€丆odex 鍙戣█/hooks/鍏变韩閿佷慨澶嶏級銆乣4818a15`锛堝浐瀹氱粦瀹氭枃妗堬級銆乣dc2ec01`锛堟渶缁堟埅鍥?鎵撳寘婧愮爜锛夛紱鐗堟湰 `0.2.0-alpha.12`銆傚€欓€?ZIP `app/release/Uta-0.2.0-alpha.12-win-x64.zip`锛孲HA-256 `e395d5189bd8e74b2d327ceaed26ad80aa279f3f211e5f6513fed67d1f450c50`锛屾潵婧?`dc2ec01436c3`锛宍dirty=false`锛屾瀯寤?`2026-10-25T07:56:38.094Z`銆?
+- 琛屼负鍙樺寲锛氭瘡涓?Uta profile 鍙粦瀹氫竴涓钩鍙帮紝缁戝畾鍐欏叆 `runtimeDir/pet-binding.json`锛涗富杩涚▼鍙帴鍙楄骞冲彴鐨?v2 浜嬩欢锛堝叾浠栧钩鍙?403锛夛紝鏈粦瀹氭椂杩?legacy 涔熸嫆缁濄€傚悓涓€骞冲彴鎵€鏈変細璇濆叡鐢ㄦ瀹狅紱`session_bind` 缁撴潫鏃у洖鍚堛€傝繛鎺ラ〉涓嶅啀鑳藉垏鎹㈠钩鍙帮紝About 鍙В闄ょ粦瀹氥€?
+- 澶氭瀹狅細鍖呭唴 `Pets/` 鏈?7 涓惎鍔ㄥ櫒锛屽悇鑷?`%LOCALAPPDATA%\Uta-Pets\<platform>` 鏁版嵁鍜?`UTA_BOUND_HOST`銆傛瀹犻澶栧啓 `%APPDATA%\uta\host-pets\<host>\runtime-endpoint.json`锛涙彃浠朵紭鍏堣鍙栵紝绔偣甯?PID锛屾杩涚▼鏂囦欢璺宠繃銆傚叡鏈夊涓讳笓灞炵鐐圭殑瀹炵幇瑙?`runtime-bridge.setExtraEndpointFile` 鍜?`plugin/shared/uta-runtime-client.mjs`銆?
+- 杩佺Щ/瑙ｉ櫎锛氭棫 localStorage 骞冲彴鍋忓ソ棣栨鍚姩杩佺Щ涓虹粦瀹氾紝骞跺啓 `uta/binding-migration-v1`锛涜В闄ゅ悗鏍囪闃绘鏃у亸濂借嚜鍔ㄧ粦鍥烇紝妗屽疇閲嶈浇涓虹嫭绔嬪緟鏈恒€傜湡瀹炰袱娆＄‘璁よВ闄ゅ凡楠岃瘉缁戝畾鏂囦欢鍜屽涓荤鐐归兘鍒犻櫎銆?
+- Codex 鎶ュ憡淇锛氬彂瑷€鏍囪鍙湪鎴愬姛 `PostToolUse` 鍐欏叆锛堟嫆缁?澶辫触浠嶄繚鐣欐渶缁堟憳瑕侊級锛沨ooks 淇′换鎸夋彃浠跺畬鏁翠簨浠堕泦鍚堣鏁板苟鏄剧ず閮ㄥ垎淇′换锛涘畨瑁呴攣鎸夊叡浜?`CODEX_HOME` 璺?profile 浜掓枼銆?
+- 楠岃瘉锛氬簲鐢?**906锛?01 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**105/105**锛宯ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€乑IP manifest 閫氳繃銆傜湡瀹炲紑鍙戝弻瀹炰緥鍒嗗埆缁戝畾 Codex/Harness锛岀鍙?56673/51411锛屼簰鐩告姇閫掑垎鍒?403/200锛涙墦鍖呭疄渚?About 鏄剧ず `v0.2.0-alpha.12 / dc2ec01436c3 / clean / Packaged`锛岃繛鎺ラ〉鍙銆傝瘉鎹 [鍊欓€夐獙鏀惰褰昡(../validation/candidate-0.2.0-alpha.12.md) 涓?`docs/validation/alpha12-*.png`銆?
+- 鏈獙鏀讹細鐪熷疄 Codex 瀹夎鐐瑰嚮/MCP 鎻℃墜銆佷袱涓湡瀹炲涓绘彃浠跺悓鏃惰繛鎺ャ€佺湡瀹?DSH/鍏朵粬瀹夸富浼氳瘽銆佺湡瀹為害鍏嬮/浜戠 TTS銆? 灏忔椂/7 澶┿€佸灞?DPI銆佹仮澶嶉〉鏍囬鏍忋€佽创闈犲浘鏍囧悓姝ャ€傚钩鍙板唴鑱婂ぉ鍏辩敤鏄璁￠€夋嫨锛涜嫢瑕佸崟鑱婂ぉ闅旂闇€鍙﹀仛浼氳瘽绾х粦瀹氥€?
+- 鐜板満锛氬紑鍙戝弻瀹炰緥涓庢墦鍖呭疄渚嬪凡鍋滄锛涙祴璇曚骇鐢熺殑 `%APPDATA%\uta\host-pets` 绔偣宸插垹闄わ紱闅旂鏁版嵁淇濈暀鍦?`%LOCALAPPDATA%\Uta-Candidates\multi-codex`銆乣multi-harness`銆乣alpha12-final`銆傛棩甯?0.1.1/stable 鏈Е纰帮紱`docs/AGENT-PORTABILITY-PLAN.md` 淇濈暀鏈彁浜ゃ€?
+
+## 鏈€鏂帮細Codex 鏂板畨瑁呬笌閫傞厤涓撻」楠屾敹锛?026-10-25锛?
+
+- 鍩虹嚎 `main/74d971b`锛屽€欓€?alpha.11銆佹彃浠?`uta-deskpet@uta/0.2.2`銆佺湡瀹?CLI `0.164.0-alpha.11.1`銆傜嫭绔?`.tmp/codex-injection-20261025/codex-home` 鍒濆鏃犳彃浠讹紝鐢熶骇瀹夎鍣ㄨ皟鐢ㄧ湡瀹?CLI 瀹夎鎴愬姛锛岄噸瑁呬笉鏀归厤缃紱瀹為檯 app-server 鏂拌亰澶╁彂鐜板苟杩炴帴 5 涓?MCP 宸ュ叿锛屽潎鍙埌杈剧敓浜фˉ銆?
+- 淇′换鍚庣敤鏈湴鍥哄畾 Responses 杈撳嚭椹卞姩鐪熷疄 Codex 娑堟伅鍜屽伐鍏烽摼璺紝寮€濮?鎬濊€?宸ュ叿鍓嶅悗/瀹屾垚鍙婁竴娆℃€у鎵瑰厑璁搞€佹嫆缁濆潎鏈夌湡瀹?hook 鍥炴墽銆傛病鏈夎皟鐢ㄤ粯璐规ā鍨嬫垨澶嶅埗鏃ュ父璁よ瘉銆傛祴璇曚俊浠讳粎鍐欏叆鏈换鍔￠厤缃紝鏈娇鐢ㄧ粫杩囦俊浠诲紑鍏炽€?
+- 鏂板彂鐜?**[P2: 鏃犱細璇濊韩浠界殑 MCP 缁曡繃宸茬粦瀹氳亰澶**銆?*[P2: 鎷掔粷鍙戣█宸ュ叿浠嶆姂鍒舵渶缁堝洖澶峕**銆?*[P2: 閮ㄥ垎淇′换璇姤鏁寸粍宸蹭俊浠籡**锛岃瑙?[涓撻」鎶ュ憡涓庡鐜癩(../validation/codex-injection-2026-10-25.md)銆傛湰杞笉淇笟鍔′唬鐮侊紱宸叉湁鍏变韩 CODEX_HOME 瀹夎閿佺己鍙ｄ篃浠嶆湭淇銆?
+- 鍥炲綊搴旂敤鐩稿叧 83/83銆佹彃浠?103/103銆傚畨瑁呴獙璇佹湭缁忚繃鐪熷疄鍊欓€夌獥鍙ｆ寜閽紝瑙掕壊娓叉煋/澹伴煶/瀹℃壒鐐瑰嚮鏈獙锛泀ueue 鎺ュ彛鍙傛暟鍖归厤锛屼絾鏈満闄勫甫 CLI 鏃犳硶鍦ㄧ嫭绔嬬洰褰曞惎鍔ㄥ畬鏁?daemon锛屽弽鍚戣緭鍏ヤ粛鏈鍒扮楠岃瘉锛屼笉鑳借璁版垚 Uta 鐨勫凡纭缂洪櫡鎴栭獙鏀堕€氳繃銆?
+- 鏈満璇佹嵁鍦ㄥ拷鐣ョ洰褰?`.tmp/codex-injection-20261025/`銆傜粨鏉熸椂鑷缓 app-server/MCP/Node 鏈嶅姟鏃犻仐鐣欙紝娴嬭瘯绔偣鍒犻櫎銆佺嫭绔嬮厤缃仮澶嶅埌瀹夎鍚庣姸鎬侊紱鏃ュ父 Codex config.toml 鍝堝笇鏈彉銆傛病鏈夋敼鏃ュ父 Uta銆佹病鏈夋浛鎹㈠彂甯冨寘锛涘師鏈?`docs/AGENT-PORTABILITY-PLAN.md` 鏀瑰姩鏈殏瀛樸€?
+- 涓嬩竴姝ュ缓璁細鍏堜慨涓婅堪涓夐」閫傞厤缂哄彛鍙婂叡浜畨瑁呴攣锛屽啀鐢ㄥ畬鏁?Codex 瀹夎鐜琛?queue 闂幆锛屾渶鍚庡湪鎵撳寘鍊欓€夐獙瀹為檯瀹夎/姘旀场/瀹℃壒浜や簰銆傝瑙佹姤鍛婁腑鐨勮瘉鎹竟鐣屻€?
+
+## 鏈€鏂帮細alpha.11 鐙珛楠屾敹锛屼粛鏈夎法瀹炰緥瀹夎浜掓枼缂哄彛锛?026-10-25锛?
+
+- 楠屾敹鍩虹嚎 `main/4270fb38f1c00fcb8d7e32289b7e7040c90e1544`锛涜瑙?[alpha.11 鐙珛楠屾敹](../ACCEPTANCE-2026-10-25-ALPHA11.md)銆傚師 11 椤逛腑 10 椤瑰湪妯″潡/缁勪欢/鍖呮牳瀵硅寖鍥撮€氳繃锛?*[P1: 鎸?Uta runtimeDir 鎸佷箙鍖栧畨瑁呴樆鏂紝鏃犳硶浜掓枼鍚屼竴 Codex 閰嶇疆鐩綍鐨勫涓疄渚媇** 浠嶉渶淇銆傚悓 profile 閲嶅惎淇濇姢宸查€氳繃锛屼笉瑕佸洖閫€璇ヤ慨澶嶏紱浠ヨ鑼冨寲 CODEX_HOME 涓哄叡浜祫婧愬仛璺ㄨ繘绋嬪師瀛愪簰鏂ュ拰娲诲疄渚嬬姸鎬佹牳瀵广€?
+- 鏈疆搴旂敤 902锛?97 閫氳繃銆? 璺宠繃锛夈€佹彃浠?103/103銆乶ode/web 绫诲瀷銆佹瀯寤恒€佷笁浠藉绾﹂€氳繃銆俙.tmp/acceptance-alpha11-20261025/probes.cjs` 鏈€缁?13/13锛沗boundary.cjs` 鐙珛澶嶇幇鍚屼竴 CODEX_HOME銆佷袱涓?runtimeDir 璋冪敤涓ゆ鏈‘璁ら€€鍑虹殑甯傚満鍐欏叆锛岀粨鏋滃湪 `boundary-result.json`銆傛墍鏈夊涓诲啓鍏ュ鐜板潎涓虹敓浜фā鍧?涓存椂鏂囦欢绯荤粺+鍙楁帶杩涚▼缁撴灉锛屾病鏈夌湡瀹炲涓诲畨瑁呫€傝竟鐣岃剼鏈埢鎰忔柇瑷€缂哄彛瀛樺湪锛屽悗缁』鍙嶈浆涓虹浜屽啓鍏ヤ笉鍙戠敓銆?
+- ZIP `68143ab8...ffe86a` 涓?manifest 涓€鑷达紝瑙ｅ帇 exe/asar 鍧囦笌 ZIP entry hash 涓€鑷达紱asar 鏋勫缓韬唤 `0.2.0-alpha.11 / 3dd17fe8749a / dirty=false`銆傛湰杞湭閲嶆柊鎵撳寘鎴栨彁鍗囨棩甯稿叆鍙ｃ€?
+- UI锛氱嫭绔?profile `acceptance-alpha11-20261025` 涓荤獥鍙?鏍戝彲璇伙紝鐐瑰嚮鍦ㄩ噸鏂扮粦瀹氭縺娲诲悗浠嶈 `Chrome Legacy Window` 鐩爣鏍￠獙鎷︽埅锛屾湭缁曡繃锛涙湰杞湡瀹炲脊绐?鐒︾偣/瀹夸富鎻℃墜/璇煶浠嶆湭楠屻€備笉瑕佸皢浜や粯鏂规埅鍥惧啓鎴愭湰杞嫭绔嬫搷浣滈€氳繃銆?
+- 鐜板満锛氭湰杞暟鎹?杩愯鏃?绔偣銆丆ODEX_HOME/DSH_HOME 鍦?`.tmp/acceptance-alpha11-20261025`锛涗富杩涚▼璁板綍 28096銆乁TC `2026-10-25T06:37:21.3054023Z`锛屾敹灏炬椂宸查€€鍑猴紝鏈己鏉€锛涙煡鏃犺 profile 鐨?Uta 瀛愯繘绋嬶紝鑷繁鐨?endpoint 宸插垹闄わ紝鍥炵幆鎺㈤拡 finally 鍏抽棴銆備笟鍔℃簮鐮佹湭鏀癸紝鏋勫缓鍒锋柊 app/out锛沗docs/AGENT-PORTABILITY-PLAN.md` 鍓嶅悗 hash 涓€鑷达紝鏈殏瀛?鎻愪氦锛屾棩甯稿疄渚嬫湭鎿嶄綔銆?
+
+## 鏈€鏂帮細alpha.11 澶嶅淇涓庡€欓€夛紙2026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛屽瀹′慨澶嶆彁浜?`9497bdd`锛堝畨瑁呬簰鏂ャ€丮CP/Node 妫€鏌ワ級銆乣5a9bf61`锛堣崏绋夸繚鎶や笌寮鸿皟鑹插姣斿害锛夈€乣b99c3e2`锛堜細璇濊繜鍒板綊灞烇級銆乣ab7012c`锛堝湪閫旈噸澶嶄簨浠讹級銆乣7a39b5a`锛堥潤鎬佺珛缁樺洖鎵э級銆乣a15594b`锛坅lpha.11 鐗堟湰涓庨殢鍖呮潗鏂欙級銆乣69ef67f`锛圦oder/Antigravity 妫€娴嬫帾杈烇級銆乣c355245`锛堣瑙夎瘉鎹級銆乣3dd17fe`锛堥樆鏂惤鐩橈紝閲嶅惎浠嶆湁鏁堬級锛涚増鏈?`0.2.0-alpha.11`銆?
+- 鍊欓€?ZIP锛歚app/release/Uta-0.2.0-alpha.11-win-x64.zip`锛孲HA-256 `68143ab8c33600a16854d8136969ec2a5021bad0a791688a08066ec1d8ffe86a`锛屾潵婧?`3dd17fe8749a`锛宍dirty=false`锛涜В鍘嬬洰褰?`app/release/Uta-0.2.0-alpha.11-win-x64`锛沗Try-Uta.bat` 浣跨敤 `%LOCALAPPDATA%\Uta-Candidates\0.2.0-alpha.11`銆傝瑙?[鍊欓€夐獙鏀惰褰昡(../validation/candidate-0.2.0-alpha.11.md) 涓?[浣撻獙璇存槑](../releases/0.2.0-alpha.11.md)銆?
+- 宸蹭慨澶?alpha.10 澶嶅 11 椤癸細瀹夎瓒呮椂鍚庝繚鎸佸啓鍏ヤ簰鏂ュ苟鎻愪緵瑙ｉ櫎鍏ュ彛锛堥樆鏂惤鐩橈紝閲嶅惎涓嶈嚜鍔ㄨВ闄わ級锛涢噸寮€寮曞/鎹㈣鑹?蹇嵎闈㈡澘淇濇姢鏈繚瀛樿崏绋匡紱杩熷埌浼氳瘽鎸夊涓诲拰璇锋眰浠ｆ暟褰掑睘锛涢潤鎬佺珛缁樼瓑寰呯湡瀹炴寕杞藉洖鎵э紱宸ュ潑 undo/redo 淇濈暀寰幆妯″紡锛涘湪閫旈噸澶嶄簨浠剁瓑寰呴娆℃姇閫掔粨鏋滐紱MCP 绮剧‘鏉＄洰涓庡惎鐢ㄧ姸鎬侊紱鍏朵粬瀹夸富鏉愭枡闅忓寘骞朵慨姝ｂ€滄殏涓嶆敮鎸佽嚜鍔ㄦ娴嬧€濓紱瀹夎鍓嶆鏌?node锛涗袱濂楀己璋冭壊鍏辩敤 WCAG 瀵规瘮搴︾畻娉曘€?
+- 鑷姩楠岃瘉锛氬簲鐢?**902 椤癸紙897 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**103/103**锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏋勫缓閫氳繃銆傛柊澧炴寮忓洖褰掞細`color-contrast`銆乣model-load-gate`銆乣static-switch-gate`銆乣connections-domain-race`銆乣workshop-draft-signal`銆乣settings-workshop-undo`锛屽苟鎵╁厖浜嗗涓诲畨瑁呫€佽繍琛屾椂閲嶅銆佽缃獥鍙ｈ崏绋垮拰寮曞娴嬭瘯銆?
+- 鐪熷疄绐楀彛锛氭渶缁堝疄渚?profile `packaged-alpha11-final2`锛孶ta 鏁版嵁銆佽繍琛屾椂銆佺鐐广€乣CODEX_HOME`銆乣DSH_HOME` 鍏ㄩ儴鍦?`%LOCALAPPDATA%\Uta-Candidates\alpha11-final2-20261025`銆傞獙璇佷簡瀹夸富鍗＄墖鎺緸銆佹崲瑙掕壊鑽夌淇濇姢銆佸揩鎹烽潰鏉胯法绐楀彛鎷︽埅銆侀潤鎬佺珛缁樺垏鎹㈡垚鍔熴€侀噸寮€寮曞淇濇姢銆佺惀鐝€寮鸿皟鑹诧紙姝ｅ父 4.95:1銆佹偓鍋?5.71:1锛夊拰鍏充簬椤?`v0.2.0-alpha.11 / 3dd17fe8749a / clean / Packaged`銆備氦浜掓埅鍥炬潵鑷悓涓€婧愮爜鏍戠殑涓婁竴鏋勫缓锛堝樊寮傚彧鏈夐樆鏂惤鐩橈級锛岀増鏈?璇婃柇鎴浘鏉ヨ嚜鏈€缁堟瀯寤恒€傛埅鍥惧湪 `docs/validation/alpha11-*.png`銆?
+- 鏈獙鏀?杈圭晫锛氱湡瀹?Codex 瀹夎鐐瑰嚮锛堟渶缁堝疄渚嬩娇鐢ㄩ殧绂?`CODEX_HOME`锛屽彧妫€娴嬶級銆丮CP 瀹為檯鎻℃墜銆佸畨瑁呰秴鏃?瑙ｉ櫎闃绘柇鐨勭湡瀹?UI 瑙﹀彂銆佸叾浠栧涓荤湡瀹炰細璇濄€佺湡瀹為害鍏嬮/浜戠 TTS銆? 灏忔椂/7 澶┿€佸灞?DPI銆佹仮澶嶉〉鏍囬鏍忋€佽创闈犲浘鏍囧悓姝ャ€傚瀹′腑鐨勭晫闈㈡墦纾ㄥ缓璁紙榛樿鍔ㄤ綔鏍堜綅缃€佸叧閿抚 DOM 韬唤銆乣.pressable` 鍥炲脊锛夋湭澶勭悊銆?
+- 鐜板満锛氭湰杞殑 alpha.11 鏈€缁堝疄渚嬩富杩涚▼ `30492`銆佺涓€娆¤瑙夊疄渚嬩富杩涚▼ `37856` 鍧囧凡娓呯悊锛涙闈㈠師鏈夌殑 alpha.10 鍊欓€夊疄渚嬶紙PID `38280`锛変笉鏄湰杞惎鍔紝鏈仠姝紱鏃ュ父 0.1.1/stable 鏈Е纰般€傞殧绂绘暟鎹繚鐣欏湪 `%LOCALAPPDATA%\Uta-Candidates\alpha11-verify-20261025`銆乣alpha11-final-20261025` 鍜?`alpha11-final2-20261025`銆傛墦鍖呭墠 `docs/AGENT-PORTABILITY-PLAN.md` 涓夋涓存椂鏀惰捣銆佹墦鍖呭悗鎭㈠锛屼粛鏈彁浜ゃ€?
+- 涓嬩竴姝ュ缓璁細鍦ㄦ効鎰忔帴鍙楀浠芥椂锛岀敤鐪熷疄 Codex 閰嶇疆瀹屾垚涓€娆″畨瑁呫€乣/hooks` 淇′换鍜屾柊浼氳瘽 MCP 鎻℃墜锛涘啀鐢ㄧ湡瀹?DS 妯″瀷纭棰勮鍥為粯璁?鍙栨秷閮ㄤ欢杩囨浮锛涗箣鍚庡啀鍋?8 灏忔椂/7 澶╀笌澶氬睆 DPI銆備笉瑕佺敤娴嬭瘯鍏ㄧ豢浠ｆ浛鐪熷疄瀹夸富/澹伴煶楠屾敹銆?
+
+## alpha.10 鐙珛鍏ㄩ潰澶嶅锛?026-10-25锛屽凡鐢?alpha.11 澶勭悊锛?
+
+- 鍩虹嚎 `main/18d18a25a3186d28bcdf16aca3c34f2821f44e94`锛屽€欓€?alpha.10 婧愮爜 `1898646`銆傚瀹¤瑙?[澶嶅鎶ュ憡](../REVIEW-2026-10-25-ALPHA10.md)锛?1 椤癸紙1 椤?P1銆?0 椤?P2锛夛紝9 椤规湁杩愯鎺㈤拡锛屽彟 2 椤规牳瀵瑰彂甯冨寘鏉愭枡/鏉′欢鎬?Node 渚濊禆銆俛lpha.11 宸蹭慨澶嶅苟琛ュ洖褰掞紱璇ヨ疆鑷韩鏈慨涓氬姟浠ｇ爜銆?
+- 璇ヨ疆楠岃瘉锛氬簲鐢?878锛?73 閫氳繃銆? 璺宠繃锛夛紝鎻掍欢 103/103锛宯ode/web 绫诲瀷銆佹瀯寤轰笌涓変唤濂戠害閫氳繃銆傜嫭绔嬭剼鏈?`.tmp/review-current-20261025/probes.cjs` 鐨勬柇瑷€鍒绘剰璇佹槑缂洪櫡瀛樺湪锛涗慨澶嶆椂宸插弽杞负姝ｇ‘棰勬湡骞剁撼鍏ユ寮忔祴璇曘€?
+- 鐪熷疄绐楀彛杈圭晫锛氳杞嫭绔嬫墦鍖呬富绐楀彛鍜屾爲鍙锛涚偣鍑昏 `Chrome Legacy Window` / 鐩爣绐楀彛鏍￠獙鎷掔粷锛屾縺娲婚噸璇曚粛澶辫触锛屾湭缁曡繃銆傛湭瀹屾垚鐪熷疄棣栨寮曞/鍔ㄦ晥/楹﹀厠椋?瀹夸富瀹夎楠屾敹锛涗粨搴撴棫鎴浘浠呬綔瑙嗚鍙傝€冦€?
+- 鐜板満锛氳杞嫭绔?profile `review-current-20261025`锛屾暟鎹?绔偣鍦ㄦ湰杞?`.tmp`锛岄殧绂?CODEX_HOME/DSH_HOME锛涜嚜寤轰富杩涚▼ 35248 涓庡瓙鏍戝凡娓呯悊锛岀鐐瑰凡鍒犻櫎锛屾帰閽堟湇鍔?finally 鍏抽棴銆傛湭鍋滄鐢ㄦ埛鍚岃矾寰勬棩甯稿疄渚嬶紝鏈Е纰版棩甯稿涓婚厤缃紝鏈浛鎹㈣繍琛屽寘銆傚師鏈?`docs/AGENT-PORTABILITY-PLAN.md` 鏀瑰姩淇濈暀锛涙瀯寤轰粎鍒锋柊蹇界暐鐨?app/out銆?
+
+## 鏈€鏂帮細棣栨寮曞銆佽摑璋冪晫闈笌鍊欓€?alpha.10锛?026-10-25锛?
+
+- 褰撳墠鍒嗘敮 `main`锛屾牳蹇冩彁浜?`3507a6f`锛堥娆″紩瀵?+ 钃濊壊澶栧３锛夈€乣a085c0b`锛堝畨瑁呭畨鍏ㄤ笌鐣岄潰瀹℃煡淇锛夈€乣8d1fa00`锛堝畨瑁呭洖婊氫笌寮曞閫€鍑轰慨澶嶏級銆乣8eb4491`锛堢Щ闄ゅけ鏁堢殑鍦嗙偣蹇嵎鎿嶄綔鍗＄墖锛夈€乣0779776`锛堟竻鐞嗘棫鍋忓ソ/闈欐€佽绾?鎵樼洏蹇嵎閿瓑锛夈€乣f449796`锛堟ā鍨嬪垏鎹氦鍙夋贰鍖栧垵鐗堬級銆乣3dc5fcb`锛堟寜甯ц鏃躲€?60ms 鍙屾ā鍨嬫贰鍖栵級銆乣1898646`锛堥璁?宸ュ潑澶嶄綅椤轰綅锛夛紱鐗堟湰 `0.2.0-alpha.10`銆傚€欓€?ZIP 鍦?`app/release/Uta-0.2.0-alpha.10-win-x64.zip`锛孲HA-256 `0812fc7d613b1d2544c3bab818550a0c59f3b151cad7662f564e3e2295be21ff`锛屾潵婧?`18986466457a50cb1bf8c2a26ca0bd89ebc53d49`锛宍dirty=false`锛沍IP 宸茶В鍘嬪埌鍚岀増鏈洰褰曞苟鐢ㄩ殧绂?profile 鍚姩锛屽叧浜庨〉鏄剧ず `v0.2.0-alpha.10`銆佹彁浜?`18986466457a`銆佸共鍑€鏋勫缓銆佹墦鍖呭彂琛岀増銆傝瑙?[鍊欓€夐獙鏀惰褰昡(../validation/candidate-0.2.0-alpha.10.md)銆?
+- 宸插畬鎴愶細鐪熷疄棣栨娴侊紙浜旀銆佽烦杩囥€佸畬鎴愩€侀噸寮€锛夈€? 涓涓荤殑鐪熷疄妫€娴嬨€丆odex 鎻掍欢宸插畨瑁呯姸鎬佽鍙栥€丏SH 鎵嬪姩姝ラ銆佽嚜缁樻爣棰樻爮鏈€澶у寲/杩樺師銆?60px 涓ゅ垪鎹㈣姝ラ鏉°€?048px 瀹藉睆宸ュ潑鍙屾爮銆佹繁娴呬富棰樻埅鍥句笌瀵规瘮搴︿慨澶嶃€傝嚜鍔ㄩ獙璇侊細搴旂敤 878 椤癸紙873 閫氳繃銆? 璺宠繃銆? 澶辫触锛夛紝鎻掍欢 103/103锛岀被鍨嬫鏌ヤ笌鏋勫缓閫氳繃銆傛埅鍥惧湪 `docs/validation/screenshots-0.2.0-alpha.10/`銆?
+- alpha.6 娓呯悊锛氭瀹犲凡涓嶅啀鏄剧ず宸︿笂瑙掑渾鐐癸紝璁剧疆涓績鈥滄闈笌浜や簰鈥濋噷鐨勨€滆鑹茶韩涓婄殑灏忓渾鐐?/ 蹇嵎鎿嶄綔鈥濆崱鐗囧凡绉婚櫎锛涙棫 `orbAction` 瀛楁淇濈暀鍏煎锛屼笉鍐嶆毚闇叉棤鏁堟灉鐨勯€夋嫨銆?
+- alpha.7 鍚岀被娓呯悊锛氭棫鍋忓ソ瀵煎叆涓嶅啀鍒楀嚭鎮诞鐞冨姩浣滐紱闈欐€佺珛缁樼鐢ㄨ绾胯窡闅忓苟璇存槑鍘熷洜锛涙ā鍨嬮敊璇彁绀哄幓閲嶏紱鍚屾鈥滄鍦ㄨ〃鐜扳€濋璁撅紱Antigravity 璇存槑鏀逛负宸ヤ綔鍖烘彃浠?+ MCP 閽╁瓙锛涘€欓€?寮€鍙戞墭鐩樺彧鏄剧ず瀹為檯娉ㄥ唽鐨勫揩鎹烽敭銆?
+- alpha.5 棰濆淇锛氬畨瑁呰秴鏃朵笖杩涚▼鏈€€鍑烘椂涓嶈嚜鍔ㄥ洖婊氾紱鎭㈠鍓嶅彟瀛樺畨瑁呮湡闂村閮ㄦ敼鍔紱棣栨瀹夎澶辫触绉昏蛋鏂板缓閰嶇疆锛沨ooks 鍙鍙湡瀹?Uta 娈碉紱寮曞瀹屾垚澶辫触鍙粠浠绘剰姝ラ閫€鍑猴紱璇煶璺宠浆淇濈暀瀹夸富/璇煶閫夋嫨锛涘繖纰屾椂閿佷綇瀵艰埅锛涙祬鑹插己璋冭壊鑷姩閫夋嫨鍙鎸夐挳鏂囧瓧銆?
+- 鏈疆鍒绘剰娌℃湁鍦ㄤ綘鐨勭湡瀹?Codex 閰嶇疆涓婄偣鍑烩€滃畨瑁呭苟杩炴帴鈥濓細瀹夎鍐呮牳鐢卞崟鍏冩祴璇曚笌涔嬪墠闅旂 `CODEX_HOME` 鐨勫疄闄呭畨瑁呴獙璇侊紱鏈€欓€夋瀯寤虹殑鐪熷疄瀹夎鐐瑰嚮浠嶅緟浣犲湪鎺ュ彈澶囦唤鏃朵綋楠屻€侱SH 妗岄潰 profile 鐢卞涓荤嫭鍗狅紝Uta 淇濇寔鎵嬪姩銆傚叾浠栧涓诲彧楠岃瘉妫€娴嬩笌鎵嬪姩璇存槑銆?
+- 鏈獙鏀讹細鎭㈠椤佃嚜缁樻爣棰樻爮銆乄indows 璐撮潬鍚庣殑鍥炬爣鍚屾銆佹繁鑹插揩鎹烽潰鏉块€愰」鏃犻殰纰嶃€佺湡瀹為害鍏嬮/浜戠 TTS銆佺湡瀹炴嫈鎻掓樉绀哄櫒銆? 灏忔椂/7 澶┿€佸綍灞忋€傚€欓€夋湭鏇挎崲鏃ュ父 0.1.1/stable銆?
+- 閫忔槑璁板綍锛氭棭鏈?DSH 璋冪爺鎵ц `dsh plugin --profile tui --help` 鏃讹紝DSH 鍦?`C:\Users\Administrator\.dsh\profiles\tui` 鍒濆鍖栦簡涓€涓┖ profile锛涘凡妫€鏌ュ唴瀹瑰苟鍙垹闄よ娆¤皟鐮斿垱寤虹殑绌虹洰褰曪紝娌℃湁瀹夎鎻掍欢鎴栨敼鍔?DSH 璁剧疆/鏃ュ父 profile銆?
+- 娴嬭瘯鐜板満锛氭簮鐮侀獙鏀跺疄渚?`visual-review-20261025`銆乣visual-alpha5-20261025`銆乣desktop-cleanup-alpha6` 涓庢墦鍖呴獙鏀跺疄渚?`packaged-alpha4-20261025`銆乣packaged-alpha5-20261025`銆乣packaged-alpha6-20261025`銆乣packaged-alpha7-20261025` 鍧囧凡閫€鍑猴紱闅旂浣撻獙鏁版嵁淇濈暀鍦?`%LOCALAPPDATA%\Uta-Candidates\` 渚涘鏌ャ€傛棩甯?Uta 鏈鍚姩銆佸仠姝㈡垨瑕嗙洊銆傛墦鍖呭墠鏃㈡湁鏈彁浜ゆ枃妗?`docs/AGENT-PORTABILITY-PLAN.md` 鍘熷瓧鑺備繚鐣欙紝鏈撼鍏ユ湰杞彁浜わ紱鎵撳寘鏃朵复鏃舵敹璧枫€佹墦鍖呭悗宸叉仮澶嶃€?
+
+## 鏈€鏂颁慨澶嶉獙鏀朵笌璇勪环锛?026-10-25锛?
+
+鐢ㄦ埛瑕佹眰鐙珛楠屾敹淇鍚庤瘎浠烽」鐩紱鍩虹嚎 `main/d681c4134e9b205cec7651cc5b258aaaa966be86`锛屽姛鑳戒慨澶?`6e06090` / `b4c0842`銆傝瑙?[楠屾敹鎶ュ憡涓庨」鐩瘎浠穄(../ACCEPTANCE-2026-10-25.md)銆備富瑕佷慨澶嶆湁鏁堬紝浣嗕笁椤归澶栨帰閽堝け璐ワ紝涓嶈兘娌跨敤鍚庢枃鍘嗗彶璁板綍浣溾€滃叏閲忛€氳繃鈥濈粨璁猴細**[P2: 鏃у彂閫佸け璐ュ洖鎵ц鐩栨柊鑽夌]**銆?*[P2: 鎵瑰鐞嗗涓诲叆鍙ｅ彂鐜版垚鍔熶絾 spawn EINVAL]**銆?*[P2: Runtime 鍚?session 骞跺彂 seq-only 鏈簰鏂**銆傛湰杞病鏈変慨涓氬姟浠ｇ爜銆?
+
+- 鏈疆楠岃瘉锛氬簲鐢?819 椤癸紙814 閫氳繃銆? 璺宠繃锛夈€佹彃浠?103/103銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤轰笌涓変唤濂戠害閫氳繃锛涚嫭绔嬫帰閽?15 椤癸紙12 閫氳繃銆? 澶辫触锛夈€傛潗鏂欏湪蹇界暐鐩綍 `.tmp/acceptance-20261025/`銆?
+- 鍖呬笌鐜锛氭牳瀵?`preview-all-fixes-20261025` 鐨?asar 鍝堝笇涓庝氦浠樹竴鑷达紝浠ユ柊寤?`acceptance-20261025` profile 鍚姩锛汣omputer Use 鍙垪鍑哄敮涓€娴嬭瘯绐楀彛锛岃鍙栬鎷掔粷 `Computer Use was not approved to use uta`锛屾湭鎵ц UI 杈撳叆銆佹病鏈夌敤 CDP 缁曡繃銆傜湡瀹炰簯璇煶銆侀害鍏嬮銆佸涓?CLI銆佽法鏈哄櫒/闀挎椂/DPI 浠嶆湭楠屻€?
+- 鏀跺熬锛氭牳瀵瑰彲鎵ц璺緞銆丳ID 涓庣簿纭?UTC 鍚姩鏃堕棿鍚庢竻鐞嗚嚜寤?Uta 杩涚▼鏍戝拰妯℃嫙鏈嶅姟锛岃嚜宸辩殑 endpoint 宸插垹闄わ紱鏃ュ父鏃у寘鏈仠姝?瑕嗙洊銆備笟鍔℃簮鐮佹湭鏀癸紝鏋勫缓鍒锋柊 app/out锛涗笁浠藉師鏈夋湭鎻愪氦瑙勫垝鏂囨。淇濈暀銆?
+- 涓嬩竴姝ワ細鍏堝洿缁曚笁椤圭己闄峰榻愬皬鑼冨洿淇锛屽啀鐢ㄤ富瑕佸涓?妯″瀷/璇煶璺嚎鍋氳В鍘嬪寘瀹屾暣娴佺▼楠屾敹銆傞」鐩凡鏈夋竻妤氭柟鍚戝拰宸ョ▼鍩虹锛屽彂甯冧笌鐪熷疄缁勫悎楠岃瘉浠嶆槸涓昏鐭澘銆?
+
+## 鏈€鏂版í鍚戝鏌ヤ氦鎺ワ紙2026-10-24 鑷?25锛?
+
+鐢ㄦ埛瑕佹眰 review 褰撳墠椤圭洰锛屽寘鎷綔鍦?bug 鍜屼娇鐢ㄤ綋楠岋紱鏈疆娌℃湁瀹炴柦涓氬姟淇銆傚鏌ュ熀绾?`main/049220026a838eb879f276a126831e7525524f13`锛屽畬鏁村彂鐜般€佽Е鍙戞潯浠躲€佷綅缃€佷慨澶嶅缓璁拰楠岃瘉杈圭晫瑙?[鍏ㄩ潰瀹℃煡鎶ュ憡](../REVIEW-2026-10-24.md)銆傚叡 18 椤癸紙4 椤?P1銆?3 椤?P2銆? 椤?P3锛夛紱16 涓殧绂绘帰閽堟敮鎸佸叾涓?16 椤癸紝涓嶈兘褰撲綔鐪熷疄 Electron 鐢婚潰/澹伴煶楠屾敹銆?
+
+- 宸插畬鎴愶細搴旂敤 795 椤癸紙790 閫氳繃銆? 璺宠繃锛夈€佹彃浠?103/103銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€佷笁浠藉绾︽鏌ャ€傚垵娆?EACCES/realpath EPERM 涓烘矙绠遍檺鍒讹紝鏈€缁堟潈闄愰噸璺戦€氳繃銆備复鏃惰剼鏈拰鏃ュ織鍦?`.tmp/review-20261024/`锛岃剼鏈柇瑷€褰撳墠缂洪櫡瀛樺湪锛屽悗缁慨澶嶉渶鍙嶈浆棰勬湡鍚庣撼鍏ユ寮忔祴璇曘€?
+- 褰撳墠鐜板満锛氫笟鍔℃簮鐮佹湭鏀癸紱鏋勫缓鍒锋柊蹇界暐鐩綍 `app/out`銆傛湭鍚姩鐪熷疄 Uta 绐楀彛銆佹湭鍋滄鐢ㄦ埛杩涚▼锛汣IM 鏃犳潈鏋氫妇 PID锛屼笉寮曠敤鍘嗗彶 PID銆傝嚜寤烘祴璇曠鐐瑰凡鍏抽棴涓?endpoint 宸插垹闄ゃ€備笁浠藉師鏈夋湭鎻愪氦瑙勫垝鏂囨。淇濈暀锛屼笉绾冲叆鏈疆鎻愪氦銆?
+- 寰呴獙璇侊細鐪熷疄浜戠闊宠壊涓庢湇鍔″崗璁€侀害鍏嬮銆佸畬鏁村涓讳簨浠?杈撳叆銆丆SP 鐨勭湡瀹?Electron 鎶撳寘銆乑IP/鏂扮數鑴?闀挎椂杩愯/澶氬睆 DPI銆傛棫娴嬭瘯涓庢瀯寤洪€氳繃涓嶈兘鏇夸唬杩欎簺楠屾敹銆?
+- 涓嬩竴姝ワ細鍏堝榻?**[P1: 浜戠 TTS 瀵嗛挜鏉ユ簮涓庨噸瀹氬悜淇濇姢]**銆?*[P1: 瀹屾暣璁剧疆鍒囨崲瀹夸富鏈悓姝**銆?*[P1: 鎵撳寘闈欐€佺珛缁樿祫婧愯鎷掔粷]** 鐨勫皬鑼冨洿淇锛屽啀渚濇姤鍛婇『搴忔帹杩涖€備笉瑕佹妸瀹℃煡璇锋眰鑷姩鎵╁ぇ涓虹粨鏋勬€ч噸鏋勶紝涔熶笉瑕佺敤鏃у伐浣滃尯鎴栧叾浠栧钩鍙拌嚜鍔ㄧ画鍋氥€?
+
+## 鐢ㄦ埛鏈€鏂板喅瀹?
+
+鐢?Codex 鍗曠嫭鎺ユ墜鍏ㄩ儴寮€鍙戙€佹祴璇曘€佸鏍搞€佹暣鍚堜笌浜ゆ帴銆傛殏鍋?Qoder / Antigravity 鐨勯粯璁ゅ垎宸ワ紝涓嶈兘浠庢棫浠诲姟鍗曘€乤rmed銆佹闈㈠惎鍔ㄨ鏄庢垨鍘嗗彶鐩戝惉鎺ㄥ鏂扮殑娲惧崟鎺堟潈銆傞搴︿笉瓒虫椂淇濆瓨鐜板満锛屼笅涓€浼氳瘽缁х画锛屼笉鑷姩鎹㈠钩鍙般€傚洓涓钩鍙扮殑瀹夸富鍏煎鐩爣浠嶄繚鐣欙紝DSH 涓嶆壙鎷呮棩甯稿紑鍙戙€?
+
+涓荤洰褰?`D:/Frankenstein/Uta` 鏄粺涓€寮€鍙戠増鍏ュ彛銆傛甯稿湪 `app` 鍐呰繍琛?`npm run dev`锛屽厛鏍稿杩愯涓殑瀹炰緥锛岄伩鍏嶉噸澶嶅惎鍔ㄣ€傛牴鐩綍 `start-uta.bat` 浠嶅惎鍔ㄥ凡楠屾敹鐨勬棩甯歌В鍘嬬増 Uta.exe锛涙湰杞病鏈夋洿鏂版棩甯哥▼搴忋€傚紑鍙戜笌姝ｅ紡鏁版嵁缁х画闅旂銆?
+
+## 鏃у伐浣滃尯宸叉牳瀵瑰埌鍝噷
+
+娓呯偣鍩虹嚎锛歮ain `58b12fe9322b05023226f67983aeacf6bf397a60`銆傚叡涓荤洰褰?+ 31 涓换鍔?worktree锛涢€愪釜鏍稿鎻愪氦绁栧厛銆佹墍鏈夋湭鎻愪氦/鏈窡韪枃浠讹紝浠ュ強婧愮爜銆佹祴璇曘€佹彃浠躲€佽剼鏈€佸疄楠屽拰鏂囨。鐩綍涓蹇界暐鐨勬枃浠躲€傛鏌ュ叏閮ㄦ湰鍦版湭鍚堝叆鍒嗘敮銆乻tash 鍜屾湭鐧昏鐨勪换鍔″瓙鐩綍锛岀粨鏋滃潎涓虹┖銆?
+
+| 鍐呭 | 鏍稿缁撹涓庡鐞?|
+| --- | --- |
+| 31 涓棫浠诲姟鐩綍鐨勬彁浜?| 鍏ㄩ儴鍙粠 main 杩芥函锛屾病鏈夊緟 cherry-pick 鎴?merge 鐨勭嫭鏈夋彁浜?|
+| 29 涓?Git 骞插噣鐨勬棫浠诲姟鐩綍 | 鏃犳湭鎻愪氦鍔熻兘浠ｇ爜锛涗繚鐣欑洰褰曪紝涓嶄綔涓烘柊鐨勫疄鏂藉叆鍙?|
+| `antigravity-settings-runtime-integration` | 6 涓凡璺熻釜鏀瑰姩 + 8 涓湭璺熻釜鏂囦欢锛屽叡 14 鏂囦欢锛孲HA256 鍏ㄩ儴涓?`operations/cli-wave3-monitor/antigravity-capture.json` 涓€鑷达紱瀹冧滑鏄凡鍦?`404be6d` 澶嶆牳淇鐨勫師浜や粯锛屼笉搴斿啀瑕嗙洊褰撳墠瀹炵幇 |
+| `codex-settings-electron-validation` | 577 涓湭璺熻釜鏂囦欢鍏ㄩ儴浣嶄簬 `app/.uta-review-tmp/node-compile-cache/`锛屾槸缂栬瘧缂撳瓨锛屼笉鏄仐婕忓疄鐜?|
+| 涓荤洰褰曚腑琚拷鐣ョ殑 DSH `HANDOVER.md.tmp` | 鏄棫浜ゆ帴绋匡紝缂哄皯鍚庢潵绗?9鈥?3 鑺傦紱浠呮敹鍙栧叾涓袱澶勪粛鏈変环鍊肩殑绔犺妭寮曠敤/缂栧彿淇鍒版寮?HANDOVER锛屼繚鐣欏悗缁巻鍙诧紝鏈暣鏂囦欢瑕嗙洊 |
+| 4 涓洰褰曚腑鐨勭鏈夎緭鍏?| `codex-cli-wave3-review`銆乣codex-desktop-wave2-review`銆乣qoder-model-inspection-adapter`銆乣qoder-soullink-engine-spike` 鐨?`.uta-task/model-input` / `reference-inputs` 浠嶄繚鐣欙紝鏈Щ鍔?鍒犻櫎锛屼篃鏈彁浜?Git |
+| 涓荤洰褰曞洓浠藉師鏈変慨鏀规枃妗?| 淇濈暀鍘熷瓧鑺傦紝涓嶆殏瀛?鎻愪氦鍒版湰杞紱鍚嶅崟瑙佷笅鏂?|
+
+瀹屾暣閫愮洰褰曘€侀€愭枃浠剁姸鎬佸強 SHA256 鍦ㄦ湰鏈?`D:/Frankenstein/Uta-Workspace/operations/takeover-2026-10-24/inventory.json`銆傞潪缂撳瓨鏈彁浜ゆ枃浠跺凡澶嶅埗鍒板悓鐩綍 `backup/`锛屼粎鏈満淇濆瓨锛屼笉鏄叕寮€璧勪骇鎴栧彂甯冭緭鍏ャ€傚巻鍙插垎鏀€佷换鍔″師浠躲€佹ā鍨嬩笌楠屾敹璧勬枡鍧囨湭鍒犻櫎锛涙病鏈変互娓呯悊鐩綍浠ｆ浛纭浠ｇ爜鏄惁鏁村悎銆?
+
+鍙椾繚鎶ょ殑鍘熸湁鏂囨。锛?
+
+- `docs/AGENT-PORTABILITY-PLAN.md`
+- `docs/IMPLEMENTATION-P2-L0.md`
+- `docs/ITERATION-ROADMAP-2026-10-13.md`
+- `docs/design/blue-block-design-spec.md`
+
+## 鏈疆瀹為檯楠岃瘉
+
+鍦ㄧ粺涓€涓荤洰褰曟簮鐮併€佷笂杩板熀绾挎墽琛岋細
+
+- `app/npm test`锛?71 椤癸紝566 閫氳繃銆? 璺宠繃銆? 澶辫触锛涜烦杩囦负闇€瑕佹湰鏈虹湡瀹?DS 杈撳叆鐨勬祴璇曪紝涓嶈浣滈€氳繃銆?
+- `app/npm run test:plugin`锛?04/104 閫氳繃銆?
+- `app/npm run typecheck`锛歯ode/web 鍧囬€氳繃銆?
+- 鏍圭洰褰?`node scripts/check-first-wave-contracts.cjs`銆乣check-desktop-wave2-contracts.cjs`銆乣check-performance-mixer-contracts.cjs`锛氬潎閫氳繃銆?
+
+搴旂敤涓庢彃浠舵棩蹇楀湪鏈満 `operations/takeover-2026-10-24/app-tests.log`銆乣plugin-tests.log`銆傛湰娆℃湭閲嶆柊楠屾敹鐪熷疄鐢婚潰銆佸０闊虫垨 ZIP锛屾湭鎻愬崌 stable锛屾湭璁块棶鍐欏叆姝ｅ紡妯″瀷/璁剧疆銆備笂娆＄湡瀹炶缃獥鍙ｄ笌浠诲姟鏍忛獙璇佽褰曚粛瑙?CURRENT 鐨勬棩鏈熷垎娈点€?
+
+## 鎺ョ娓呯偣鏃剁殑杩愯鐜板満锛堝巻鍙诧級
+
+娓呯偣鏃讹紝涓荤洰褰?Electron 璺緞涓嬪彲瑙佷袱涓覆鏌撹繘绋嬶紝PID 32164 / 22600锛屽垱寤烘椂闂村垎鍒负 2026-10-23 23:31:35 / 23:31:39锛堟湰鏈烘椂鍖猴級锛涘紑鍙戞暟鎹睘浜?`uta-development/dev-f7e444bba875`銆?173 绔彛鐢?PID 18104 鐩戝惉銆傝繖閲屽彧璇佹槑杩涚▼/鐩戝惉瀛樺湪锛屾湭鎹瀹ｇО绐楀彛浜や簰姝ｅ父銆?
+
+鏈彂鐜板懡浠よ涓寚鍚戞棫浠诲姟鐩綍鐨?Qoder / Antigravity CLI 瀹炴柦杩涚▼锛屾湭閲嶆柊娲惧崟锛屾湭鍋滄浠讳綍鐜板瓨杩涚▼銆侾ID 鍙槸妫€鏌ュ綋鏃剁殑鐜板満锛屽悗缁繀椤婚噸鏂版牳瀹炶矾寰勩€佸垱寤烘椂闂村拰鐩戝惉锛屼笉寰楁寜鏈枃 PID 缁堟杩涚▼銆?
+
+鏈疆鎺ョ鏂囨。澶嶇敤鐜版湁 `codex-roadmap-1-0`銆乣task/codex/roadmap-1-0`锛岃捣鐐逛笌 main 鍚屼负 `58b12fe`锛屽師鐘舵€佸共鍑€锛涙湭涓烘鏂板紑浠诲姟鍖猴紝鏈湪璇ョ洰褰曞惎鍔ㄥ簲鐢ㄦ垨鏂?profile銆傚悗缁甯稿疄鏂界洿鎺ュ湪缁熶竴涓荤洰褰曡繘琛屻€?
+
+## 宸茬洿鎺ユ帴鎵嬬殑绗竴椤癸細璁剧疆绐楀彛淇濆瓨淇
+
+鎺ョ瑙勫垯涓庣洰褰曟牳瀵瑰凡鍦?`1821249` 鍚堝叆 main銆傞殢鍚庣洿鎺ュ湪涓荤洰褰曘€乵ain銆佽鎻愪氦涓婂疄鏂戒繚瀛樹慨澶嶏紱鍘熷洓浠芥湭鎻愪氦鏂囨。鏈撼鍏ャ€傛病鏈夋柊鐨勫疄鏂藉伐浣滃尯鎴栧疄渚嬨€?
+
+鍘熼〉闈㈢敤闈炲搷搴斿紡瀹㈡埛绔揩鐓у垽鏂?dirty锛屽箍鎾腑鍏堣祴 revision 鍐嶄笌鑷繁姣旇緝锛屾垚鍔熷洖鎵у垯鏁翠唤瑕嗙洊鑽夌銆傜幇鍦ㄧ敱 `app/src/renderer/settings-window/use-settings-draft.ts` 绠＄悊鍝嶅簲寮忓凡鎻愪氦蹇収銆侀€愬瓧娈靛悎骞朵笌缂栬緫鐗堟湰锛宍SettingsWindowApp.vue` 浣跨敤璇ラ€昏緫銆傚鎴风鍜屼富杩涚▼鍗忚涓嶅彉銆?
+
+宸插疄鐜帮細
+
+- 娌℃湁鏈湴淇敼鐨勫瓧娈甸殢杩滅鍚屾锛涙湰鍦版敼涓婚銆佸閮ㄦ敼闊抽噺涓嶄細浜掔浉瑕嗙洊鎴栬鎶ュ啿绐併€?
+- 鍚屽瓧娈靛悓鏃舵敼鍔ㄦ墠灞曠ず鍐茬獊鍚嶇О锛涒€滃啿绐侀」浣跨敤澶栭儴鐗堟湰鈥濆彧澶勭悊鍐茬獊椤癸紝鍏朵粬鏈湴鑽夌淇濈暀锛涙櫘閫氫繚瀛樹笉缁曡繃鍐茬獊銆?
+- 淇濈暀鑽夌骞朵繚瀛樺彧鎻愪氦瀹為檯淇敼瀛楁锛屼粛鍙楀鎴风 revision 妫€鏌ワ紱鏈熼棿绗笁娆″閮ㄤ慨鏀逛細鍐嶆鎻愮ず锛屼笉鑷姩瑕嗙洊/閲嶈瘯銆?
+- 鎱繚瀛樻湡闂寸殑鏂拌緭鍏ヤ繚鐣欙紝鍖呭惈閲嶆柊鏀瑰洖鏃у€肩殑鎯呭喌锛涙棫鍥炴墽涓嶈鐩栬緝鏂板箍鎾垨娓呮帀鏂板啿绐併€備繚瀛樻垚鍔熶絾浠嶆湁鏂拌緭鍏ユ椂鏄庣‘鎻愮ず浠嶅緟淇濆瓨銆?
+- 淇濆瓨澶辫触淇濈暀鑽夌骞跺厑璁搁噸璇曪紝閿欒涓嶇洿鎺ユ樉绀哄師濮嬪紓甯革紱閲嶅鐐瑰嚮涓嶄細閲嶅鍐欏叆锛涘叧闂〉闈㈤€€璁㈠苟娓呯悊鎻愮ず璁℃椂鍣紝蹇界暐杩熷埌鍥炴墽銆?
+
+楠岃瘉锛氭柊澧?`app/tests/settings-window-draft.test.cjs` 鐨?10 椤规祴璇曞苟鐧昏鍒?`npm test`銆傚疄闄呯紪璇戝苟鎸傝浇鐢熶骇 Vue 椤甸潰銆佹帶浠躲€佽崏绋块€昏緫鍜岀湡瀹?SettingsClient锛涘彧鏇挎崲 Electron 浼犺緭鍙婃棤鍏崇殑鏃у伐浣滃尯缁勪欢锛屾病鏈夊湪娴嬭瘯閲屽鍒惰崏绋跨畻娉曘€傛渶鍒濇祴璇曞涓荤己灏?Vue 鍘熺敓杈撳叆鎸囦护闇€瑕佺殑 DOM 鏂规硶/绫诲瀷锛岃ˉ榻愭祴璇曞涓诲悗 10/10 閫氳繃锛屾湭涓烘鏀瑰姩浜у搧琛屼负銆?
+
+瀹屾暣搴旂敤 581 椤癸紙576 閫氳繃銆? 璺宠繃銆? 澶辫触锛夛紝node/web 绫诲瀷妫€鏌ヤ笌浜у搧鏋勫缓閫氳繃銆傛棩蹇楀湪鏈満 `operations/takeover-2026-10-24/settings-draft-full-tests.log`銆乣settings-draft-build.log`锛涙瀯寤轰粛鏈夊凡鏈?Cubism 鏅€?script 涓嶈兘 bundle 鐨勬彁绀猴紝閫€鍑?0銆傛瀯寤轰粎涓哄瓙杩涚▼璁剧疆浠撳簱澶栦复鏃剁洰褰曪紝娌℃湁淇敼鍏ㄥ眬 TEMP 鎴?APPDATA銆傛彃浠跺拰涓変唤濂戠害鍦ㄦ帴绠″熀绾垮凡閫氳繃锛涙湰椤规湭鏀瑰崗璁?鎻掍欢锛屾湭閲嶅鏃犲叧妫€鏌ャ€?
+
+浣撻獙鍏ュ彛锛氱粺涓€寮€鍙戠増涓墦寮€鐙珛璁剧疆绐楀彛 鈫?澶栬涓庢€ц兘 鈫?淇敼寮鸿皟鑹?鈫?淇濆瓨锛涙甯镐繚瀛樺悗鎸夐挳搴斿彉涓轰笉鍙偣锛岀户缁紪杈戝悗鍐嶆鍙繚瀛樸€傞娆℃彁浜ゆ椂鍙湁瀹為檯缁勪欢娴嬭瘯锛屽悗缁凡琛ョ湡瀹?Electron 鍙岀獥鍙ｅ拰閲嶅惎楠岃瘉锛岃涓嬩竴鑺傘€傞娆′繚瀛樹慨澶嶆湭鍚姩瀹炰緥锛涘悗缁獙璇佸彧鍚姩涓存椂 profile锛屾病鏈夊仠姝㈠師寮€鍙戝疄渚嬫垨鍙戝竷 ZIP銆?
+
+## 鏈疆瀹屾垚锛氬叧闂崏绋夸繚鎶や笌鐪熷疄鍙岀獥鍙ｉ獙璇?
+
+瀹炴柦鐜板満锛氫富鐩綍銆乵ain锛岃捣鐐?`dd051ec640a9bfaf921811c6e163cc47e57362f6`锛涘師鍥涗唤鏈彁浜ゆ枃妗ｇ户缁繚鐣欍€傛病鏈夋柊 worktree 鎴栧叾浠栧钩鍙颁换鍔°€?
+
+### 瀹為檯琛屼负涓庝唬鐮?
+
+- 鍘熺敓鍏抽棴璁剧疆绐楀彛鏃讹紝鍏堢敱 renderer 鍒ゆ柇鍏紑鍋忓ソ鏄惁鏈夎崏绋裤€傚共鍑€绐楀彛鐩存帴鍏筹紱鏈夎崏绋挎樉绀衡€滀繚瀛樺苟鍏抽棴 / 鏀惧純骞跺叧闂?/ 缁х画缂栬緫鈥濄€備繚瀛樺け璐ャ€佸悓瀛楁鍐茬獊鎴栦繚瀛樺悗鐨勬柊杈撳叆鐣欏湪绐楀彛閲岋紝涓嶈嚜鍔ㄩ€夎鐩栥€傞€€鍑烘暣涓?Uta 鐢ㄥ悓涓€鏉＄‘璁ら摼璺紝閫夋嫨缁х画缂栬緫涓嶄細鍏堥攢姣佹墭鐩樸€佸瓨鍌ㄦ垨 runtime bridge銆?
+- 鏂板叡浜帴鍙?`shared/settings-window-contracts.ts`銆乵ain 鐨?`settings-ipc/window-lifecycle.ts` 鍜?preload `settingsWindow` 鍙彁渚涘噯澶囧氨缁?鎺ユ敹鍏抽棴璇锋眰/鍥炲簲褰撳墠璇锋眰銆備富杩涚▼涓ユ牸闄愬埗鍒扮櫥璁扮殑璁剧疆绐楀彛銆佸噯纭〉闈㈠拰涓?frame锛涜姹傜紪鍙疯繃鏈熴€佹湭鐭ラ€夋嫨銆佸叾浠栫獥鍙ｆ垨瀛?frame 鍧囦笉鑳芥壒鍑嗗叧闂€?
+- `SettingsWindowManager` 鍦ㄦ敹鍒?`closed` 鍓嶅缁堜繚鐣欑獥鍙ｅ紩鐢紝閬垮厤鍏抽棴琚惁鍐冲悗鍙﹀紑绗簩涓缃獥鍙ｃ€傞€€鍑哄厛绛夊緟璁剧疆绐楀彛纭锛屽彇娑堜細娓呴櫎閫€鍑烘剰鍥撅紱鐪熸鍏抽棴鍚庢墠缁х画鍘熸湁瀛樺偍钀界洏/搴旂敤閫€鍑烘祦绋嬨€傚鑸€佸穿婧冨拰鏂扮獥鍙ｄ笉鑳芥部鐢ㄦ棫璇锋眰鎴栬鏃ц繘绋嬬殑杩熷埌浜嬩欢瑙ｉ櫎淇濇姢銆?
+- `use-settings-close.ts` 鍗忚皟鑽夌淇濆瓨鍜屽叧闂紱鍙栨秷鍏抽棴鍚庤繜鍒扮殑淇濆瓨鎴愬姛涓嶅啀鍏崇獥锛屾柊鍏抽棴璇锋眰涓嶄細琚笂涓€鏉″彇娑堝洖鎵у崱浣忋€傚脊绐楄儗鏅娇鐢?inert锛屽垵濮嬬劍鐐逛负缁х画缂栬緫锛孴ab/Shift+Tab 鍦ㄩ€夐」涓惊鐜紝Esc 杩斿洖缂栬緫銆?
+- **淇濇姢鑼冨洿**锛氭湰杞彧瑕嗙洊椤堕儴鈥滀繚瀛樺亸濂解€濈鐞嗙殑鍗佷簩涓叕寮€瀛楁銆傛棫 TTS/STT 鏈嶅姟閰嶇疆鍜屽伐鍧婅嚜韬崏绋挎病鏈夊洜姝ょ粺涓€绠＄悊锛屼笉鑳藉绉版墍鏈夎缃〃鍗曢兘宸叉湁鍏抽棴淇濇姢銆?
+
+### 瀹為檯楠岃瘉鍜岃瘉鎹?
+
+榛樿搴旂敤濂椾欢澧炲姞 16 椤癸紙9 椤圭湡瀹?Vue 椤甸潰銆? 椤圭獥鍙ｇ鐞?IPC/preload锛夛紝鏈€缁?**597 椤癸細592 閫氳繃銆? 璺宠繃銆? 澶辫触**锛沶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤洪€氳繃銆傛ā鍨嬭縼绉绘祴璇曠殑 main 鍔犺浇鍣ㄦ柊澧炰竴鏉℃柊妯″潡鏇胯韩锛岀淮鎸佸師涓存椂鏂囦欢绯荤粺娴嬭瘯锛屼笉鍒犻櫎/璺宠繃鍘熺敤渚嬨€? 椤?skip 浠嶆槸缂虹湡瀹?DS 杈撳叆鐨勭敤渚嬶紝涓嶇畻閫氳繃銆備富杩涚▼鍏抽棴鎺ュ彛鍜?preload 鐢ㄧ湡瀹炵敓浜фā鍧楁墽琛岋紱缁勪欢娴嬭瘯杩愯瀹為檯 SFC/鎺т欢/SettingsClient锛屼笉澶嶅埗涓€浠界悊鎯虫祦绋嬨€?
+
+鐪熷疄 Electron 浣跨敤 `app/out` 鏋勫缓缁撴灉銆佷富杩涚▼鍘熺敓 BrowserWindow.close/app.quit銆佺湡瀹?preload 鍜屼袱涓?renderer锛屾暟鎹檺瀹氬埌 `D:/Frankenstein/Uta-Workspace/runtime/profiles/settings-close-20261024`銆傚厛鏍稿 main 涓?renderer 杩斿洖鐨?profile/userData锛屽啀鎿嶄綔锛?
+
+1. 璁剧疆淇濆瓨鍚庡疇鐗╀富棰樺悓姝ワ紱鏀归鑹茶崏绋挎椂瀹犵墿鍐欓煶閲忥紝涓ら」鍧囦繚鐣欍€?
+2. 鍚屽瓧娈靛閮ㄤ慨鏀瑰湪椤甸潰鎻愮ず鍏蜂綋鍐茬獊锛涢噰鐢ㄥ閮ㄥ啿绐侀」鍚庡叾浠栨湰鍦拌崏绋夸粛淇濈暀銆?
+3. 涓昏繘绋嬫ā鎷熷師鐢熸爣棰樻爮鍏抽棴锛岀湡瀹為〉闈㈡樉绀轰笁閫夐」涓旂劍鐐规纭紱缁х画缂栬緫淇濈暀鑽夌銆?
+4. 淇濆瓨骞跺叧闂悗閲嶅紑鍙栧埌鏂板€硷紱鏀惧純骞跺叧闂悗閲嶅紑浠嶆槸宸蹭繚瀛樺€笺€?
+5. app.quit 鏃堕€夋嫨缁х画缂栬緫锛屽悗缁湡瀹炲瓨鍌?patch 鎴愬姛锛宺untimeEndpointReady 鍜?rendererReady 浠嶄负 true锛涘啀娆￠€€鍑哄苟淇濆瓨姝ｅ父缁撴潫銆?
+6. 鏂拌繘绋嬮噸鏂拌鍙栧悓涓€鍙楁帶 profile锛宮ain 鍜屽疄闄呰缃〉闈㈠潎鎭㈠鏈€鍚庡啓鍏ュ€硷紱娌℃湁鑽夌鏃堕€€鍑烘棤闇€纭銆?
+
+鏈満璇佹嵁鐩綍 `D:/Frankenstein/Uta-Workspace/operations/settings-close-2026-10-24/`锛歚electron-results.json`锛?椤癸級銆乣restart-results.json`銆乣close-prompt.png`銆乣verify.mjs`銆乣verify-restart.mjs`銆乣app-tests.log`銆乣typecheck.log`銆乣build.log`銆傛渶鍒濊皟璇曡剼鏈敊璇亣璁?inspector 涓瓨鍦?process.mainModule锛屾敼鐢ㄥ綋鍓?Node 鐨?createRequire 鍚庣户缁紝鏈负姝ゆ敼浜у搧浠ｇ爜銆傝剼鏈彧鎿嶄綔宸叉牳瀵硅韩浠界殑涓存椂瀹炰緥銆?
+
+### 褰撳墠鐜板満涓庝綋楠屽叆鍙?
+
+涓よ疆楠岃瘉杩涚▼鍒嗗埆涓?PID 12036锛?026-10-24 00:42:35锛夈€?6280锛?0:49:13锛屾湰鏈烘椂鍖猴級锛屽潎宸查€氳繃搴旂敤姝ｅ父閫€鍑猴紱鏀跺熬鏍稿涓よ繘绋嬬粨鏉熴€?274/9275 鏃犵洃鍚€佽 profile 鐨?runtime-endpoint.json 宸叉竻鐞嗐€傚垱寤烘椂闂?璺緞淇濆瓨鍦ㄨ瘉鎹洰褰曠殑 process.json / restart-process.json锛屽悗缁笉鍙寜鍘嗗彶 PID 鍋滆繘绋嬨€?
+
+涓存椂 profile 鍜屾埅鍥句繚鐣欎綔璇佹嵁锛屼笉鏄柊鐨勬棩甯歌缃簮锛涙湭鎻愰珮 stable銆佹湭鐢熸垚鏃ュ父 ZIP銆佹湭鏀规寮忚缃?妯″瀷銆傚師寮€鍙戝疄渚嬫湭鍋滄锛屾敹灏句粛鍙鍘?32164 娓叉煋杩涚▼鍜?5173 鐩戝惉锛堜粎涓虹幇鍦猴紝涓嶆嵁姝ゆ帹鏂墍鏈夌獥鍙ｆ甯革級銆?
+
+鏈疆鍖呭惈 main/preload 淇敼锛?*闇€瑕侀噸鏂板惎鍔ㄥ紑鍙戠増鎵嶈兘瀹屾暣浣撻獙鍏抽棴淇濇姢**銆傚叆鍙ｄ负 `D:/Frankenstein/Uta/app` 鍐?`npm run dev`锛涙牴鐩綍 start-uta.bat 浠嶅惎鍔ㄦ棫鏃ュ父 exe銆備綋楠岋細璁剧疆 鈫?澶栬涓庢€ц兘 鈫?淇敼寮鸿皟鑹蹭絾涓嶄繚瀛?鈫?鐐圭獥鍙ｅ叧闂紝纭涓夌閫夐」銆備繚瀛?鍐茬獊涓庨€€鍑轰笉鍐嶅彧鏈夋ā鎷熻瘉鎹€?
+
+## 鏈疆瀹屾垚锛氭ā鍨嬫搷浣滅湡瀹炲洖鎵т笌宸ュ潑浼氳瘽鍥炴敹
+
+瀹炴柦鐜板満锛歚D:/Frankenstein/Uta`銆乵ain锛岃捣鐐?`aeaa225540c51241755a87ebe0830660d05c1000`銆傛病鏈夋淳鍗曘€侀澶?worktree 鎴栨棩甯哥増鏈洿鏂帮紱鍘熷洓浠芥枃妗ｄ粛鎸夋帴绠℃竻鍗曟牳瀵瑰師瀛楄妭骞朵繚鐣欍€?
+
+### 瀹為檯琛屼负涓庣户缁慨鏀圭殑杈圭晫
+
+- `SettingsPanel.vue` 鐨勬楠ゃ€佺粍鍚堛€佹粦鍧椼€佹帶浠躲€侀櫔浼存搷浣滀娇鐢?store 鐨勫紓姝?`requestModelAction`銆備笉鍐嶅洜涓鸿缃獥鍙ｇ殑 `live2dModel` 涓虹┖鑰岃烦杩囷紱椤甸潰鏄剧ず姝ｅ湪鎵ц銆佹瀹犲凡寮€濮嬫墽琛屾垨鍏蜂綋澶辫触銆傚涓讳晶鏃у悓姝?API 淇濈暀锛屾湭鎶婃暣涓?store 鏀规垚 Promise銆傛崲妯″け璐ヤ粛淇濈暀鐜版湁妯″瀷銆?
+- `settings-window/pet-bridge.ts` 鍙悓姝ユā鍨嬪厓鏁版嵁锛屼笉鍒涘缓绗簩涓ā鍨嬨€傚彂閫佹椂鍏嬮殕缂栬緫鑽夌銆侀『搴忕瓑寰呭姞閿佷笌鎵ц鍥炴墽锛岀粦瀹?URL/妯″瀷寮曠敤浠ｆ/妗屽疇浠ｆ锛涙ā鍨嬪彉鍖栧悗鍒锋柊蹇収锛屼絾涓嶈嚜鍔ㄩ噸鏀炬棫杈撳叆銆傚埛鏂板揩鐓ф湁娆℃暟闄愬埗锛涢€€鍑烘竻璁℃椂鍣ㄣ€亀atcher 鍜屾帓闃熼瑙堛€?
+- 瀹犵墿鎵ц鎶藉埌 `settings-window/pet-executor.ts`锛岀敱 `DeskpetStage.vue` 璋冪敤鐢熶骇 store/controller銆傛湭鍔犺浇妯″瀷銆佹棤鎵ц鍣ㄣ€佹棤鏁堝弬鏁颁笉浼氭姤鍛婃垚鍔熴€傜粍鍚堥瑙堝湪瀹犵墿渚х湡姝ｈ缃?preview 鏍囪锛涙楠や笌婊戝潡 controller 杩斿洖瀹為檯鍙楃悊缁撴灉銆?
+- main 鐨?`settings-ipc/pet-commands.ts` 绠＄悊鍏蜂綋璁剧疆鏂囨。鐨勫崟璋冧細璇濈紪鍙蜂笌寰呭鐞嗗懡浠ゃ€傜櫥璁扮獥鍙ｃ€佸噯纭〉闈€佷富 frame 涓庡洖鎵ф潵婧愬潎鏍￠獙銆傚叧闂€佷富鏂囨。瀵艰埅銆佸穿婧冦€佽秴鏃朵富鍔ㄥ彇娑堝苟閫氱煡瀹犵墿閲婃斁锛涙柊浼氳瘽鍜屽凡閲婃斁缂栧彿褰㈡垚杈圭晫锛屾棫娓呯悊涓嶅奖鍝嶆柊浼氳瘽锛屾棫鍛戒护涓嶈兘閲嶆柊鍔犻攣銆傚疇鐗╅噸杞芥敼鍙?petEpoch锛屾棫蹇収涓嶈兘缁х画鎺у埗鏂?renderer銆?
+- `release-workshop` 绔嬪嵆鍙栨秷妗ュ唴鎺掗槦鎿嶄綔锛屼笉绛夋煇娆℃湭杩斿洖鐨勯瑙堛€傜寮€宸ュ潑鏍囩銆佸垏鎹㈣缃鍩熷鑷寸粍浠跺嵏杞斤紝浠ュ強姝ｅ父鍏抽棴鏃堕兘閲婃斁閿?寰幆棰勮骞舵竻闄?80ms 鎷栧姩棰勮璁℃椂鍣ㄣ€傚彇娑堝叧闂繚鐣欏師宸ュ潑銆備富杩涚▼鍥炴敹涓轰富瑕佷繚闅滐紝pagehide 浠呰ˉ鍏呫€?
+- 鏀瑰姩娑夊強 main/preload/shared 鐨勫唴閮ㄧ獥鍙ｉ€氫俊濂戠害锛屽紑鍙戠増闇€瑕侀噸鍚紱澶栭儴 SDK v2/鎻掍欢鍗忚鏈敼銆傚洖鎵ц鏄庡疄闄呮帴鍙?寮€濮嬶紝涓嶈瘉鏄庡畬鏁村姩鐢绘垨鍙戝０宸插畬鎴愩€備粛鐢ㄥ師 Live2D 鎵ц閾撅紱鏂?mixer 鏈帴鐪熷疄 Core锛屾湰杞篃娌℃湁瀹炵幇璇煶璇曞惉鎴栧伐鍧婅崏绋挎寔涔呭寲銆?
+
+### 娴嬭瘯涓庣湡瀹炵獥鍙ｈ瘉鎹?
+
+鏂板榛樿鐧昏鐨?`settings-pet-lifecycle.test.cjs`锛? 椤癸級鍜?`settings-pet-execution.test.cjs`锛? 椤癸級銆傛墽琛屽疄闄呯敓浜?controller銆乪xecutor銆乥ridge銆丳inia/Vue store锛涙浛鎹紶杈撱€丆ore handler 鍜岀幆澧冿紝涓嶅鍒朵骇鍝佺畻娉曘€傝鐩栬繜鍒板洖鎵с€佸瓙 frame銆佹ā鍨嬩唬娆°€佹棫娓呯悊/鏂颁細璇濄€佸穿婧?瀵艰埅/瓒呮椂銆佹帓闃熷揩鐓с€佺珛鍗抽€€鍑轰笌 watcher 閲婃斁銆傛ā鍨嬭縼绉?main 鍔犺浇鍣ㄨˉ鏂版ā鍧楁浛韬紝鍘熺敤渚嬩粛鎵ц銆?
+
+鏈€缁堝簲鐢?**614 椤癸細609 閫氳繃銆? 璺宠繃銆? 澶辫触**锛沶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤猴紝浠ュ強鏍圭洰褰曚笁浠?`check-*-contracts.cjs` 閫氳繃銆? 椤?skip 浠嶄负闇€瑕佺湡瀹?DS 杈撳叆鐨勭敤渚嬶紱鏈疆鏈繍琛屾彃浠跺洖褰掞紙鏈鏈敼鎻掍欢锛屾帴绠℃椂 104/104 閫氳繃锛夈€傛瀯寤轰繚鐣欐棦鏈?Cubism 鏅€?script 鎻愮ず锛涙湭鏀瑰叏灞€ TEMP/APPDATA銆?
+
+鐪熷疄 Electron 浣跨敤鏈€缁?`app/out`銆佺湡瀹?main/preload 鍜屽疇鐗?璁剧疆鍙岀獥鍙ｏ紝鍏堟牳瀵归殧绂昏韩浠藉啀鎿嶄綔銆傛湰鏈鸿瘉鎹湪 `D:/Frankenstein/Uta-Workspace/operations/settings-actions-2026-10-24/`锛?
+
+- `electron-results.json`锛?2 椤归€氳繃銆傚疄闄呭伐鍧婃楠?缁勫悎鎸夐挳鍙婄姸鎬佹彁绀猴紱瀹犵墿鍙湁涓€涓ā鍨嬨€佽缃病鏈夋ā鍨嬶紱鍙栨秷鍏抽棴淇濈暀閿侊紱纭鍏抽棴銆佸埛鏂般€乺enderer 宕╂簝鍚庡疄闄呭疇鐗╅攣涓?preview 鍧囨竻闄わ紱宕╂簝鎭㈠鍙户缁瑙堬紱绂诲紑宸ュ潑鏍囩鎴栬鑹查鍩熼噴鏀撅紱瀹犵墿閲嶈浇鎷掔粷鏃х粦瀹氾紝涓诲姩閲嶈瘯鎭㈠锛涘疇鐗╀笉鍙敤鏃跺疄闄呮寜閽樉绀洪敊璇€?
+- 涓昏繘绋嬪彧鍔犺鍔ㄨ瀵熷櫒璇诲彇瀹犵墿娓呯悊鍥炴墽锛岀‘璁ら攣纭凡閲婃斁锛屼笉浠ラ噸寮€鍚庣殑蹇収鎺ㄦ柇姝ゅ墠閲婃斁銆俙verify.mjs`銆佹垚鍔?澶辫触鎴浘銆乣app-tests.log`銆乣typecheck.log`銆乣build.log` 淇濈暀锛涙湭鎻愪氦涓汉鏁版嵁鎴栨埅鍥惧埌 Git銆?
+- 鏈€缁堜复鏃惰繘绋?PID 23324锛屽垱寤烘椂闂?2026-10-24 01:31:13锛堟湰鏈烘椂鍖猴級锛岃矾寰勪笌韬唤璁板綍鍦?`process-attempt2.json`锛涘垵娆￠獙璇?PID 3992 鍚屾牱宸查€€鍑恒€傚彧璁╁凡鏍稿韬唤鐨勬祴璇曞疄渚嬫甯搁€€鍑猴紝鏀跺熬纭 23324 涓嶅瓨鍦ㄣ€?276/9277 鏃犵洃鍚紝涓存椂 runtime-endpoint.json 宸插垹闄ゃ€備笉鍙寜鍘嗗彶 PID 娓呯悊鍏朵粬杩涚▼銆?
+- profile/userData 涓?`settings-actions-20261024` / `D:/Frankenstein/Uta-Workspace/runtime/profiles/settings-actions-20261024`銆備繚鐣欎綔娴嬭瘯璇佹嵁锛屼笉浣滀负鏂扮殑鏃ュ父璁剧疆婧愩€傛寮?AppData/妯″瀷銆乻table 鐧昏涓庢棩甯?0.1.1 ZIP 鏈敼锛屽師寮€鍙戝疄渚嬫湭鍋滄銆?
+
+浣撻獙鍏ュ彛锛氶噸鍚富鐩綍寮€鍙戠増 鈫?璁剧疆 鈫?瑙掕壊涓庡姩浣?鈫?棰勮宸ュ潑 鈫?棰勮姝ラ/缁勫悎锛岀湅鍒扳€滄瀹犲凡寮€濮嬫墽琛屸€濓紱鍒囨崲璇煶鍒嗗尯鍋滄宸ュ潑鎺у埗锛岃繑鍥炰粛鑳介瑙堛€傝缁撴灉宸茬粡杩囩湡瀹炵獥鍙ｉ獙璇侊紝浣嗕笉绛変簬 DS 鏂版帶鍒躲€侀煶棰戞垨 ZIP 宸查獙鏀躲€?
+
+## 鏃犱汉鍊煎畧杩炵画鎺ㄨ繘鎺堟潈
+
+鐢ㄦ埛鍦?2026-10-24 鏈疆鏄庣‘瑕佹眰鏃犱汉鍊煎畧鎸佺画鎺ㄨ繘锛屼笉閫愯疆鍋滀笅鏉ャ€傛寜鏃㈠畾 1.0.0 浜у搧椤哄簭瀹屾垚姣忚疆瀹炵幇銆佹祴璇曘€佸疄闄呴獙鏀躲€佹彁浜ゅ拰浜ゆ帴鍚庣户缁紱涓嶆仮澶嶅閮?Agent 娲惧崟銆傛渶缁堟彁鍗囨棩甯?exe 浠嶉渶鐢ㄦ埛楠屾敹锛涜处鍙风櫥褰曘€佸閮ㄨ澶?骞冲彴鎵嬪姩鎿嶄綔銆佹湭瀹氫骇鍝佹柟鍚戠瓑鐪熷疄闃诲濡傚疄璁板綍锛屼笉鑳藉亣閫犻獙鏀剁粨鏋溿€?
+
+## 鏈疆瀹屾垚锛氭ā鍨嬭兘鍔涙樉绀轰笌 DS 澶撮儴鍗曢€氶亾璇曢獙
+
+璧风偣 main `eae469e846f029dbbde9e8b8b22259e1974ff73b`锛屼富鐩綍鐩存帴瀹炵幇銆傝鑹蹭笌鍔ㄤ綔鏂板 `settings-window/ModelPerformancePanel.vue`锛岄粯璁ゆ姌鍙狅紱璇诲彇鐪熷疄鑳藉姏锛屾寜澶撮儴/瑙嗙嚎/鐪肩潧/鐪夋瘺/鍢撮儴/韬綋鏄剧ず鍙敤/閮ㄥ垎鍙敤/闇€鏍″噯/涓嶆敮鎸併€傛櫘閫氱晫闈笉鍒楀弬鏁?ID锛屾妧鏈鎯呬繚鐣欏唴瀹圭鍚嶃€佹槧灏勫師鍥犲強 native/applied 鏍锋湰銆傛部鐢?Bento/钃濊壊璁捐 tokens锛屼笉鍔犺鍔ㄧ敾搴擄紱绯荤粺鍑忓皯鍔ㄧ敾鏃朵繚鐣欒兘鍔涜鍙栵紝鍋滅敤杞ご婕旂ず銆?
+
+2026-10-26锛氱敤鎴疯涓鸿闈㈡澘澶氫綑锛堚€滅洿鎺ュ湪棰勮宸ュ潑閲屾嫋婊戝潡涓嶅氨鐭ラ亾鑳戒笉鑳界敤浜嗏€濓級锛屽凡浠庤鑹查〉绉婚櫎骞跺垹闄ょ粍浠躲€俙inspect-performance` / `preview-head|eyes|mouth|ambient` 鍛戒护涓庢墽琛屽櫒浠嶄繚鐣欙紝渚涜瘖鏂笌鍥炲綊娴嬭瘯浣跨敤銆?
+
+### 鎶€鏈惤鐐逛笌杈圭晫
+
+- `main/model-performance-assets.ts` 琚幇鏈?inspectModelAssets 璋冪敤锛屽彧璇?model3 澹版槑鐨?MOC銆佺汗鐞嗐€丆DI銆乸hysics銆乸ose銆乪xpression銆乵otion/sound锛屼笉鎵弿涓汉 presets/adapter銆傞€愬紩鐢?realpath 闄愬埗鍦ㄦā鍨嬬洰褰曪紱JSON 8 MiB銆佸崟浜岃繘鍒?32 MiB銆佹€婚噺 128 MiB銆?024 鏂囦欢涓婇檺锛岀己澶?鎹熷潖杩斿洖 null銆傜鍚嶇畻娉曚负 `uta-live2d-assets-v1:` + 鎺掑簭鐨?`[鐩稿璺緞, SHA256]` JSON 鐨?SHA256锛屽寘鍚?model3 鑷韩锛涗笌 DS 鍐荤粨鍩哄噯绛惧悕鏄袱涓笉鍚岀増鏈紝涓嶈兘鐩存帴姣旇緝銆傚叏閲忓厓鏁版嵁鍙湪鍔犺浇鏃惰繑鍥炲疇鐗╋紝涓嶉€愬抚璇荤洏銆?
+- `services/performance/model-runtime.ts` 瀵瑰綋鍓?`_model.parameters` 鎵ц宸插悎鍏ョ殑 inspectCoreModel/profile builder銆傛瘡娆″姞杞介兘鏍稿鐪熷疄 Core锛屾渶澶氱紦瀛?8 涓畬鍏ㄥ尮閰嶇殑 profile锛涙棤鍙俊璧勬簮璧勬枡鍒欎笉寮€鏀捐瘯楠岋紝涓嶅奖鍝嶆棫鎺у埗銆傛寜鏍囧噯 ID銆侀潪鐗╃悊杈撳嚭銆侀粯璁ゅ€间袱渚у潎鏈夌┖闂达紝淇濆畧寮€鏀?headX銆傜鍚嶄笉鍚釜浜鸿鐩栵紱鎵嬪姩鏍″噯缂撳瓨涓庢寔涔呰〃鐜版柟妗堟湭瀹炵幇銆?
+- 妯″瀷鐢熷懡鍛ㄦ湡 prepare 闃舵鐧昏 runtime锛涗綔搴熷姞杞姐€佸嵏杞姐€侀攢姣佸仠姝㈡棫璇曢獙銆俵oader 鐨勮嚜鐒舵洿鏂板寘瑁呭湪鏃у弬鏁版爤鍚庤皟鐢?mixer锛岀墿鐞嗗墠鍙啓 headX锛涜瘯楠屾湡闂磋鍙傛暟鐨勬棫 active/transitions/post 鏍堝啓鍏ユ殏鍋滐紝鍘熺敓 motion/focus 浠嶆槸褰撳抚鍩哄噯銆傛病鏈夎础鐚殑鍏朵粬閫氶亾缁濅笉鍥?mixer neutral 鍊艰鍐欏叆銆傚弬鏁版寜瀹為檯 default 鍒嗘杩樺師锛屼繚鐣欎笉瀵圭О鑼冨洿銆?
+- 璇曢獙鏄竴娆℃渶澶?4 绉掋€?0% 鑼冨洿浠ュ唴鐨勮繛缁浆澶达紝浣跨敤褰撳墠甯у師鐢熷ご閮ㄥ€间綔涓?mixer add 鍩哄噯锛涘埌鏈?鍋滄鐩存帴缁撴潫璇ョ煭鏃?mixer锛屽師 native save/load 涓嶈鏀瑰啓銆備负閬垮厤 owner/澧撶闀挎湡绱Н锛屾瘡娆¤瘯楠屾柊寤?mixer锛岀粨鏉熶笉淇濈暀 leases銆備笉鏄寔缁〃鐜板紩鎿庯紝鏈縼绉诲槾褰?鐪ㄧ溂/韬綋锛屼篃鏈紩鍏?Soullink銆?
+- 鍐呴儴鐧藉悕鍗曟柊澧?inspect-performance/preview-head锛涘疄闄呴瑙堜粛缁戝畾鏃㈡湁妯″瀷/浼氳瘽浠ｆ銆傛棫瀵圭収璋冪敤鐪熷疄棰勮 handler锛屽繀椤诲厛鍚姩鍐嶅姞缂栬緫閿侊紱棣栨瀹炴祴鍙戠幇鍏堝姞閿佷細琚棫 controller 鎷掔粷锛屽凡淇骞跺姞鍥炲綊銆傛棫瀵圭収浣跨敤鍒嗘鍏抽敭甯э紝鏂板鐓т娇鐢ㄨ繛缁洸绾匡紝涓嶈兘瀹ｄ紶涓哄悓涓€鑴氭湰鐨勬€ц兘鎴栬鎰熶紭鍔ｆ祴閲忋€?
+- 鍏抽棴/宕╂簝/瓒呮椂娌跨敤涓婅疆 main 浼氳瘽鍥炴敹骞跺湪 executor 閲婃斁 runtime锛涙姌鍙犳ā鍨嬭〃鐜般€佺寮€棰嗗煙涔熷仠姝€傛挱鏀炬湡闂?`presetPreviewActive` 璁″叆 renderActive锛岄伩鍏嶉瑙堝崐閫旈檷涓哄緟鏈哄抚鐜囥€傚叾浣欐ā鍨?琛ｇ墿/鐗╃悊浠嶄负鏃ф墽琛岄摼銆?
+
+### 楠岃瘉銆佽瘉鎹拰鐜板満
+
+鏂板 `model-performance.test.cjs` 榛樿鐧昏鐨?12 椤癸細鐪熷疄 inspection/profile/mixer銆侀潪瀵圭О鑼冨洿銆佺墿鐞嗚緭鍑烘嫆缁濄€佷粎 head 鍐欏叆銆佽秴鏃?閿欒閲婃斁銆佺敓浜?loader 鏃у啓鍏ラ€€鍑?鎭㈠銆乪xecutor 浼氳瘽閲婃斁/鏃ф帶鍒堕攣椤哄簭锛屼互鍙婄湡瀹炰复鏃舵枃浠剁郴缁熺殑鍐呭 hash/鏃佽溅蹇界暐/缂哄け/瓒婄晫/瓒呴檺銆傞粯璁ゅ簲鐢?**626 椤癸細621 閫氳繃銆? 璺宠繃銆? 澶辫触**锛屾彃浠?**104/104**銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤轰笌涓変唤濂戠害妫€鏌ラ€氳繃锛? 涓?DS 鍘嗗彶 skip 涓嶇畻鏈疆鐪熷疄楠屾敹閫氳繃銆?
+
+浠撳簱澶?`D:/Frankenstein/Uta-Workspace/operations/model-performance-2026-10-24/` 淇濈暀 app-tests/typecheck/build/plugin 鏃ュ織銆乣verify.mjs`銆乣electron-results.json`锛? 椤归€氳繃锛夈€乣ds-capabilities.json`銆乣head-samples.json`銆丏S 涓庤缃埅鍥俱€傚疄闄?Electron 楠岃瘉 DS 247/44/8 涓?body 鍏抽棴銆佸崟妯″瀷銆佹棫棰勮鎾斁/鑷姩缁撴潫銆佽繛缁?headX 鐪熷疄鍐欏叆/鑷姩缁撴潫銆佹墜鍔ㄥ仠姝€佺寮€棰嗗煙銆佸噺灏戝姩鐢汇€佹姌鍙犱笌鍘熺敓鍏崇獥閲婃斁銆傛埅鍥惧凡鏌ョ湅锛涙病鏈夌湡瀹炴湁澹?楹﹀厠椋?ZIP 楠屾敹銆?
+
+鍙粠 `assets/ds-control-baseline-v1` 鐨勬竻鍗曟牳瀵?SHA 鍚庡鍒?59 涓祫婧?缃插悕鏂囦欢鍒颁复鏃?profile 鐨?models/DS-control锛涙病鏈夎鍐欐寮?AppData 妯″瀷銆傛祴璇?profile 涓?`model-performance-20261024`锛寀serData 涓?`D:/Frankenstein/Uta-Workspace/runtime/profiles/model-performance-20261024`銆傛渶缁?PID 8840锛堟湰鏈?2026-10-24 01:52:04锛夛紝宸叉甯搁€€鍑猴紝9282/9283 鏃犵洃鍚€佷复鏃剁鐐瑰垹闄ゃ€傞杞剼鏈鑸簿纭枃瀛楀畾浣嶅け璐ュ悗锛屼复鏃?PID 22328 鏈畬鍏ㄩ€€鍑猴紱鏍稿鐪熷疄璺緞銆佸垱寤烘椂闂村拰甯︽祴璇曠鍙ｇ殑鍛戒护琛屽悗鍙竻鐞嗚娆¤嚜寤哄疄渚嬨€傝褰曞湪 process-attempt1.json / process-attempt2.json / process.json锛屼笉鎸夋棫 PID 娓呯悊鍏朵粬瀹炰緥銆?
+
+浣撻獙锛氶噸鍚富鐩綍寮€鍙戠増 鈫?瑙掕壊涓庡姩浣?鈫?灞曞紑鈥滄ā鍨嬭〃鐜扳€?鈫?鏃ч璁?/ 璇曢獙鎺у埗 鈫?鍋滄骞舵仮澶嶃€傛寮?DS 鏁版嵁銆乻table銆佹棩甯?ZIP 鍜屽洓浠藉師鏈夎剰鏂囨。淇濈暀銆傛病鏈夋棩甯哥増鏈彂甯冦€?
+
+## 鏈疆瀹屾垚锛氳闊冲叆鍙ｅ幓閲嶄笌鐪熷疄璇曞惉缁撴灉
+
+璧风偣 main `7bd662421797a12b8fb4c07882cc7e8af7665a74`锛屼富鐩綍鐩存帴瀹炴柦锛屾棤娲惧崟銆佹棤鏂?worktree銆?
+
+- `SettingsWindowApp.vue` 淇濈暀鍞竴涓€濂楀叕寮€鎾姤瀛楁锛堥《閮ㄤ繚瀛橈級锛涚Щ闄ゆ柊 system 閫夐」浣嗕笉鏀瑰巻鍙?system 鍊硷紝鏄剧ず鏃ф潵婧愭彁绀恒€傛潵婧愬彲鍦ㄦ挱鎶ュ叧闂椂閰嶇疆锛岄煶閲?璇€熻ˉ鐪熷疄 label/id銆俙SettingsTab.vue` 涓嶅啀宓?TTS/STT锛屾敼涓虹粡 SettingsPanel 浜嬩欢璺宠浆璇煶鍩燂紱STT 浠呭湪璇煶鍩熷嚭鐜颁竴娆°€?
+- `TtsSettingsSection.vue` 鍙鐞嗘湇鍔¤繛鎺?瀵嗛挜/璇曞惉锛屾敼鐢?Bento tokens銆傝繛鎺ヤ俊鎭部鐜版湁鑷姩淇濆瓨锛孉PI 瀵嗛挜鏄惧紡淇濆瓨锛屼笂鏂瑰亸濂戒笌璇曞惉浣跨敤 props 鐨勫綋鍓嶈崏绋匡紝涓嶅啋鍏呴《閮ㄤ繚瀛樿鐩栨湇鍔￠厤缃€備簯绔繚瀛樺け璐ュ彲瑙侊紱鎵嬪姩鎱繚瀛樺彧鍦ㄥ師瀛楁鏈啀娆℃敼鍙樻椂閲囩撼瑙勮寖鍖栧洖鎵э紝瀵嗛挜涔熶粎娓呴櫎鏈鎻愪氦鐨勫師杈撳叆锛屼笉娓呮帀鍚庣画閿叆銆傛棫浜戠鏉ユ簮鍒濆鍖栦粛娌垮師鍏煎瑙勫垯锛岀粺涓€鏈嶅姟閰嶇疆鏉ユ簮/姣?provider 鑽夌涓?STT 鑽夌鏄悗缁寖鍥淬€?
+- main 鏂?`settings-ipc/voice-preview.ts`锛屾敞鍐?`settings-voice-preview`锛沺reload 鏂?`previewSpeech`銆傚彧璁ゅ凡鐧昏鐨勮缃獥鍙ｃ€佸噯纭〉闈笌涓?frame锛涙渶澶?120 瀛楋紝0.5鈥? 鍊嶉€熷害锛屾湭鐭ュ瓧娈垫嫆缁濓紝鏈湴鍙厑璁告棤鍑嵁鐨勫洖鐜?HTTP(S)銆備簯绔彧鐢ㄤ富杩涚▼淇濆瓨閰嶇疆涓庡瘑閽ワ紝涓嶆帴鏀惰姹傝嚜甯﹀瘑閽?浠绘剰浜戠绔偣銆傛瘡璁剧疆绐楀彛鍚屼竴鏃跺埢涓€涓悎鎴愶紝闊抽鍝嶅簲鏈夊ぇ灏?mime 闄愬埗锛涢敊璇彧杩斿浐瀹氫唬鐮併€傚師 tts-synthesize 涓庡涓?瀹℃壒鏉冮檺淇濇寔鍘熼檺鍒躲€?
+- renderer 鏂?`services/voice-preview.ts` 鐙珛鎷ユ湁涓€涓?Audio锛氬彧鏈?onplaying 鎵嶆樉绀烘挱鏀撅紝ended 鎵嶅畬鎴愶紱鑷劧 pause-before-ended 涓嶇畻澶辫触銆傚仠姝㈡殏鍋?鍗歌浇/鍥炴敹 object URL锛実eneration 蹇界暐杩熷埌闊抽锛涘悎鎴愬凡鍙戝嚭鏃跺彧鍙栨秷鎾斁鎰忓浘锛岀洿鍒拌璇锋眰缁撴潫鍓嶇鐢ㄩ噸澶嶅悎鎴愶紝涓嶈兘澹扮О缃戠粶璇锋眰宸茶涓銆傛挱鏀炬湁 30 绉掍笂闄愩€傛湭鐭?IPC 寮傚父涓嶅悜鐣岄潰娉勯湶姝ｆ枃銆佽矾寰勬垨鍑嵁銆傛棫 tts.ts 鐨?previewTts 涓嶅啀琚缃〉璋冪敤銆?
+- `tts-cloud.ts` 鐨?`mergeCloudTtsConfig` 鐢ㄤ簬涓昏繘绋嬩繚瀛橈細鍚屽悗绔櫘閫氫繚瀛樺彲淇濈暀 Key锛屾崲鍚庣涓嶆惡甯︿笂涓€瀹剁殑 Key锛涙槑纭彁渚涘綋鍓嶆柊 Key 鏃舵墠淇濆瓨瀹冿紝闈炴硶 backend 鎷掔粷銆俇I 鍒囨崲鍚庣娓呯┖鏈彁浜ゅ瘑閽ュ苟鎻愮ず閲嶆柊淇濆瓨銆傚綋鍓嶄笉鏄瘡鍚庣瀵嗛挜浠撳簱锛屽垏鍥炰粛闇€閲嶆柊濉啓锛涙湭鍔ㄦ寮忓姞瀵嗘枃浠舵垨閰嶇疆銆?
+
+楠岃瘉锛氭柊澧為粯璁ゅ浠?14 椤癸紙voice-preview 13 + 鐪熷疄鏈嶅姟 SFC setup/淇濆瓨 1锛夛紝鎵ц鐢熶骇涓昏繘绋?handler銆佺湡瀹炴挱鏀惧櫒鎺у埗鍣ㄣ€佸疄闄?Vue/Pinia 缁勪欢淇濆瓨閫昏緫銆傚畬鏁村簲鐢?**640 椤癸細635 閫氳繃銆? 璺宠繃銆? 澶辫触**锛涙彃浠?**104/104**銆乶ode/web 绫诲瀷銆佹瀯寤轰笌涓変唤濂戠害妫€鏌ラ€氳繃銆? 椤瑰巻鍙?DS 杈撳叆 skip 涓嶇畻閫氳繃銆?
+
+鐪熷疄 Electron 璇佹嵁浣嶄簬 `D:/Frankenstein/Uta-Workspace/operations/voice-settings-2026-10-24/`锛歷erify.mjs銆乪lectron-results.json锛? 椤归€氳繃锛夈€侀敊璇?瀹屾垚鎴浘鍙婃祴璇曟棩蹇椼€備娇鐢ㄥ彈鎺у洖鐜?HTTP server 杈撳嚭鏈夋晥涓ょ PCM WAV锛岃瀵熺湡瀹?Audio.currentTime 鎺ㄨ繘銆乿olume=椤甸潰鑽夌銆佽姹?speed=椤甸潰鑽夌鍜?ended锛涗笂鏂瑰叕寮€鍋忓ソ浠嶄负鍘熷瓨鍌ㄥ€硷紝鑽夌鏈璇曞惉淇濆瓨銆傚彟楠岀己浜戠 Key銆丠TTP 澶辫触銆佸悎鎴愪腑鍙栨秷銆佹挱鏀惧仠姝€佽法棰嗗煙鍗歌浇銆佽繛鎺ラ〉璺宠浆涓庡悗绔崲 Key銆傛病璋冪敤澶栭儴浜戠 TTS銆佹病鐢ㄧ湡瀹炲瘑閽ャ€佹病楠岃瘉鍏蜂綋闊宠壊/浜哄伐鍚劅/楹﹀厠椋庛€傛埅鍥惧凡鏌ョ湅锛涜ˉ榻愭鍓嶆棤鏁?label prop 瀵艰嚧鐨勬粦鍧楁爣绛剧己澶便€?
+
+鏈€缁堜复鏃跺疄渚?PID 30124锛屽垱寤烘椂闂存湰鏈?2026-10-24 02:09:51锛宲rofile `voice-settings-20261024`锛寀serData `D:/Frankenstein/Uta-Workspace/runtime/profiles/voice-settings-20261024`銆傚凡姝ｅ父閫€鍑猴紝9284/9285 鏃犵洃鍚€佷复鏃剁鐐瑰凡娓呯悊锛涙湰鍦版祴璇?HTTP server 宸插叧闂€傞娆¤剼鏈鐢?publicSettings.read 鍚嶅瓧瀵艰嚧楠屾敹涓柇锛屼慨姝ｈ剼鏈悗瀹屾暣閫氳繃锛屾湭涓烘鏀逛骇鍝?API銆傛鍓嶄袱涓复鏃?PID 24788/10192 宸查€€鍑猴紝璁板綍淇濈暀锛屼笉鎸夋棫 PID 娓呯悊鍏朵粬瀹炰緥銆傛寮?AppData/妯″瀷銆佹棩甯?ZIP/stable 鍜屽洓浠藉師鏈夎剰鏂囨。淇濇寔銆?
+
+浣撻獙锛氶噸鍚紑鍙戠増 鈫?璇煶 鈫?閰嶇疆鏈湴鎴栦簯绔?鈫?璇曞惉褰撳墠澹伴煶 / 鍋滄璇曞惉銆傞《閮ㄢ€滀繚瀛樺亸濂解€濈鐞嗘挱鎶ヨ涓猴紱涓嬫柟鏈嶅姟/瀵嗛挜鏈夌嫭绔嬩繚瀛樿鏄庛€傜湡瀹炴湇鍔￠渶鐢ㄦ埛宸叉湁鍙敤鏈嶅姟涓庡瘑閽ワ紝涓嶈兘鎶婂彈鎺?PCM 娴嬭瘯鍐欐垚鐢ㄦ埛闊宠壊楠屾敹銆?
+
+## 鏈疆瀹屾垚锛氬綋鍓嶅疄渚嬫棫鍋忓ソ棰勬涓庣‘璁ゅ鍏?
+
+璧风偣 main `9fd4b667fffaad191cf4eabb983e6ffbc257216c`銆傚叧浜庝笌璇婃柇鏂板 `SettingsImportPanel.vue`銆傚彧妫€鏌ュ綋鍓?renderer origin 鐨?`deskpet/ui-state-biophilic-v1` / `deskpet/ui-state`锛屼笉鏄壂鎻忔寮?AppData 鎴栨墍鏈夊紑鍙戝疄渚嬶紱`legacy-preferences.ts` 鍏堝仛鍗佷簩瀛楁鐧藉悕鍗曟姇褰憋紝閿欒瀛楁鍙彁绀烘暟閲忥紝鍘?blob/绔偣/Key/妯″瀷/棰勮涓嶈法 IPC銆佷笉鍒犻櫎銆傚凡鏈?current claim 鐨勫瓧娈甸粯璁や繚鐣欙紱鏈?claim 鐨勫崟涓€鏃ф潵婧愰粯璁よˉ鍏ワ紝澶氫釜涓嶅悓鏉ユ簮榛樿褰撳墠鍊硷紝鐢ㄦ埛鍙€愰」鏀归€夈€?
+
+### 鎻愪氦涓庡浠?
+
+- `shared/settings-import-contracts.ts` / preload.settingsImport 鎻愪緵 preview/apply/cancel銆俶ain `settings-ipc/import-preview.ts` 鍙璁剧疆绐楀彛鍑嗙‘椤甸潰涓庝富 frame锛屾寔鏈変竴浠戒笉鍙彉鐨勫凡鏍￠獙鏉ユ簮蹇収锛涗笉鏆撮湶浠绘剰鏂囦欢璇诲彇鎴栬矾寰勩€備袱鍒嗛挓 token 涓?sender/frame/revision 缁戝畾锛屽崟娆℃秷璐广€傛柊棰勬銆佸彇娑堛€佸鑸€佸穿婧冦€侀攢姣併€侀€€鍑哄潎鍥炴敹鏃?token 涓庤鏃跺櫒锛涙參鏃ч妫€涓嶈鐩栨柊棰勬銆?
+- `SettingsImportRequest` 澧炲姞鍙€?selections锛涘師 importLegacy 琛屼负鍏煎銆傚甫 selections 鏃跺繀椤昏鐩栨湰鎵规墍鏈夊瓧娈碉紝姣忛」鍙兘 current 鎴栧疄闄呭寘鍚瀛楁鐨勬潵婧?ID銆俙legacy-importer.applyReviewedSelections` 鍦ㄥ悓涓€涓?candidate 涓鐞嗘渶缁堝€?claim/鏉ユ簮鏀舵嵁锛屼笉鍏?import 鍐?patch銆傚師鏉ユ湭灞曠ず鐨勫巻鍙?conflicts 鍘熸牱淇濈暀锛屾湰娆″凡鏄庣‘閫夋嫨涓嶅啀鍒堕€犳柊鐨勫啿绐併€傝繃鏈?revision 鎷掔粷锛屼笉鑷姩 force/retry銆?
+- `AtomicWriter.ensureImportBackup` 鍙负棣栨鏃犱富鏂囦欢鐨勬槑纭鍏ラ澶栧啓 rollback 鏂囨。锛岄€氳繃鐙崰涓存椂鏂囦欢/fsync/rename 鍙戝竷锛涘凡鏈変富鏂囦欢缁х画璧板師鍏堝啓鍏ュ墠澶囦唤銆傜‘璁ゅ鍏ュ墠宸叉湁褰撳墠璁剧疆澶囦唤锛屾棫 localStorage 鍘熻褰曚笉鍙樸€傚浠芥垨鍊欓€夊啓鍏ュけ璐ヤ繚鐣欏唴瀛?鍘熷€硷紝娓呯悊鑷缓涓存椂鏂囦欢銆傞娆″€欓€?rename 澶辫触鏃跺彲鑳戒粎鍓╂湁鏁?backup锛涗笅娆″惎鍔ㄥ繀椤婚樆鏂瓑寰呮仮澶嶏紝涓嶈兘褰撲綔鏂拌鍐欓粯璁ゅ€硷紝鎭㈠ UI 鏄笅涓€杞€?
+- UI 鏈夐《閮ㄨ崏绋挎椂绂佺敤瀵煎叆锛涙潵婧愮浉鍚?digest 宸插鐞嗗垯璺宠繃銆傚鍏ュ箍鎾部鐢ㄦ棦鏈?SettingsClient/閫愬瓧娈佃崏绋垮悎骞讹紝瀹犵墿鍜岃缃悓姝ャ€傛病鏈夊紑鏀?stable/canonical-stable锛屾病鏈夎嚜鍔ㄦ敼姝ｅ紡鏁版嵁锛屼篃鏈縼鏈嶅姟鎴栨ā鍨嬫梺杞︺€?
+
+### 楠岃瘉涓庣湡瀹炵幇鍦?
+
+鏂板榛樿鐧昏 `settings-import-preview.test.cjs` 13 椤癸紝娑电洊鐧藉悕鍗?鍙棰勬銆侀娆″浠姐€佹槑纭鐩?淇濈暀銆佹牸寮忔嫆缁濄€佸苟鍙?revision銆乼oken 褰掑睘/杩囨湡/鐢熷懡鍛ㄦ湡銆侀噸澶嶅鍏ャ€佺鐩樻晠闅溿€佷繚鐣欐棫鍐茬獊涓庢參鏃ч妫€銆傚畬鏁村簲鐢?**653 椤癸細648 閫氳繃銆? 璺宠繃銆? 澶辫触**锛涙彃浠?**104/104**銆乶ode/web 绫诲瀷銆佹瀯寤恒€佷笁浠藉绾﹂€氳繃銆?
+
+璇佹嵁鐩綍 `D:/Frankenstein/Uta-Workspace/operations/settings-import-2026-10-24/`銆傛渶缁?`verify-final.mjs` 瀹為檯鎿嶄綔 9 椤归€氳繃锛氶妫€涓嶅垱寤轰富/澶囦唤鏂囦欢銆佸疇鐗╂棤瀵煎叆鏉冮檺銆侀€愬瓧娈甸€夋嫨涓庡弻绐楀彛鍚屾銆侀娆?rollback 澶囦唤/涓嶅甫鏁忔劅瀛楁銆侀噸澶嶆棤鍐欍€佸苟鍙戞嫆缁濄€佸彇娑堟棤鍐欎笖 token 澶辨晥銆佸埛鏂?token 澶辨晥銆佽崏绋块棬鎺с€俙verify-restart-final.mjs` 鏂拌繘绋嬮獙璇佸鍏ュ€煎拰鍚庢潵瀹犵墿鏀瑰姩淇濈暀銆傛埅鍥惧凡鏌ョ湅锛宍electron-results.json`銆乣restart-results.json` 涓庢祴璇曟棩蹇椾繚鐣欍€傞娆¤剼鏈?probe 绛夊緟 profile 鍒濆鍖栦笉瓒筹紝鏇剧湅鍒?Electron 灏氭湭瑕嗙洊鐨勯粯璁よ矾寰勶紱鏈€缁堣剼鏈瓑寰?userData 纭鍚庢墠鎿嶄綔锛屾湭鍚戣榛樿璺緞鍐欒缃€?
+
+鏈€缁堟暟鎹?profile 涓?`settings-import-final-20261024` / `D:/Frankenstein/Uta-Workspace/runtime/profiles/settings-import-final-20261024`锛屽鍏?PID 9260锛?2:26:19锛夈€侀噸鍚?PID 26184锛?2:26:29锛屾湰鏈烘椂鍖猴級銆?*閫€鍑鸿川閲忚竟鐣?*锛氬鍏ュ疄渚嬫甯搁€€鍑猴紝閲嶅惎瀹炰緥鍦?runtime 绔偣宸插垹闄ゃ€乵ain inspector 宸插叧闂悗锛孋hromium 9286 绔彛/娴忚鍣ㄨ繘绋嬩粛娈嬬暀骞朵笉鍝嶅簲锛涙柇寮€ renderer CDP 鍚庝粛鏇惧鐜般€傛鍓?PID 36376 鍚屾牱鏈夋畫鐣欍€傚潎鎸夋湰杞褰曟牳瀵圭湡瀹炶矾寰勩€佸垱寤烘椂闂村拰娴嬭瘯鍛戒护琛屽悗浠呮竻鐞嗚繖浜涜嚜寤哄疄渚嬶紝鏈姩鐢ㄦ埛寮€鍙戝疄渚嬶紱涓嶈兘鍐欐垚鎵€鏈夋甯搁€€鍑洪獙璇侀€氳繃銆?
+
+鍙︾敤鏃?Chromium 娴忚鍣ㄨ皟璇曠鍙ｃ€佷粎 main inspector 鐨?`settings-exit-probe-20261024` 楠岃瘉鍚屼竴鏈€缁?app/out锛氬姞杞界湡瀹炴ā鍨嬪拰璁剧疆鍚?app.quit锛孭ID 32428锛?2:28:42锛夋甯搁€€鍑恒€傝瘉鎹?start-exit-probe.ps1 / verify-exit.mjs / process-exit-probe.json銆傚畠璇存槑璇ュ満鏅彲閫€鍑猴紝涓嶈瘉鏄庢祻瑙堝櫒璋冭瘯娈嬬暀鐨勬牴鍥犲凡瑙ｅ喅锛涚暀鍦ㄨ川閲忛樁娈靛鏌ャ€傚綋鍓嶆墍鏈夋湰杞?9286/9287/9289銆佷复鏃剁鐐瑰拰杩欎簺楠岃瘉杩涚▼鍧囧簲宸叉竻鐞嗭紝浜ゆ帴鍓嶉噸鏂版鏌ャ€?
+
+娌℃湁楠屾湁澹?澶栭儴骞冲彴/ZIP锛屾病鏈夊彂甯冦€傛寮?AppData銆丏S 婧愭ā鍨嬨€佹棩甯哥増鏈笌鍥涗唤鍘熸湁鑴忔枃妗ｄ繚鎸佸師鏍枫€?
+
+## 鏈疆瀹屾垚锛氭崯鍧忚缃殑澶囦唤鎭㈠涓庨噸鏂拌鍙?
+
+璧风偣 main `a68504d573ce9bee6111c3dcd2ffa7ce3237eda7`锛屼富鐩綍瀹炴柦锛宻table 榛樿宸ュ巶绂佺敤淇濇寔銆傛棫闃绘柇椤靛彧鏈夐噸璇曚笖閲嶈瘯浠嶈鍐呭瓨闃绘柇鎬侊紱鐜板湪浣跨敤 `settings-window/recovery-screen.ts`锛屽湪 Pinia/妯″瀷/瀹夸富/闊抽鍒濆鍖栦箣鍓嶆樉绀烘仮澶嶉〉闈€傛煡鐪嬪浠戒笌纭鎭㈠鍒嗗紑锛岄粯璁ょ劍鐐硅惤鍦ㄥ彇娑堬紱鍙栨秷涓嶆敼鏂囦欢锛岃緝鏂扮増鏈鏄庢竻妤氫笖涓嶆彁渚涢檷绾ф仮澶嶃€傝闃绘柇鐨勮缃枃妗ｄ粛鐧昏 clean close 鍥炴墽锛屽師鐢熷叧绐?閫€鍑轰笉浼氬洜缂哄皯瀹屾暣璁剧疆缁勪欢鑰屽崱浣忋€?
+
+### 鎶€鏈竟鐣?
+
+- `shared/settings-recovery-contracts.ts` / preload.settingsRecovery 澧炲姞 preview銆乺estore銆乺etry 涓?recovered 璁㈤槄锛沵ain `settings-ipc/recovery.ts` 瑕佹眰宸茬櫥璁?UI銆佸噯纭〉闈€佷富 frame銆倀oken 缁戝畾 owner/frame锛屽鑸?宕╂簝/閿€姣佹竻鐞嗭紱涓昏繘绋嬩笉鎺ユ敹浠讳綍璺緞鎴栦换鎰忔枃浠跺悕锛屽彧璋冪敤褰撳墠 canonicalSettingsStore銆俿table 鏈垵濮嬪寲鏂?store 鏃朵笉缁曡繃绂佺敤銆?
+- `settings-store/recovery.ts` 鍙/鍐欏浐瀹?`settings.v1.json` 鍜?`settings.v1.backup.json`銆俠ackup 鍙楁棦鏈?1 MiB/瀹屾暣 schema 鏍￠獙锛屾崯鍧?main 鏈€澶?4 MiB锛涜秴鍑?涓嶅彲璇?閾炬帴涓嶈嚜鍔ㄥ鐞嗐€傚簳灞傛湁鐣岃鍙栨鏌?lstat銆佹枃浠跺彞鏌?inode/dev 涓庡ぇ灏忥紝鎷掔粷鏂囦欢閾炬帴銆佺洰褰曚笌 junction銆傛牎楠屾湁鏁堝浠藉悗鍙戜袱鍒嗛挓 token锛岃褰曚富/澶囦唤鍐呭 SHA锛涙仮澶嶅紑濮嬪拰鏇挎崲鍓嶉噸鏂版牳瀵癸紝鍙樺寲鎷掔粷銆?
+- 纭鎭㈠鏃跺厛鎶婂師浠跺師濮?Buffer 鐙崰鍐欏叆 `settings.v1.json.recovery-original.<鏃堕棿>.<UUID>.bin` 骞?fsync锛屽啀鍐欏浠戒复鏃舵枃浠跺苟 rename 鏇挎崲 main銆傛湁鏁?backup 涓嶅姩锛涘師浠跺惈闈?UTF8 瀛楄妭涔熶繚鐣欎竴鑷淬€傚け璐ユ竻鑷缓 scratch锛屼富鏂囦欢/澶囦唤淇濇寔锛涘悕瀛楁潵鑷唴閮ㄥ浐瀹氭ā鏉匡紝涓嶇敱 renderer 鎻愪緵銆傝嫢涓绘枃浠跺師鏈己澶憋紝鍒欎笉铏氭瀯鎹熷潖鍘熶欢銆?
+- 涓嶄緷璧栧惎鍔ㄦ椂缂撳瓨鐨?reason 鍒ゆ柇鏈潵 schema锛歱review/restore 鐨勫疄闄呮枃浠惰鍙栦篃璇嗗埆杈冩柊 schema锛堝惈 BOM锛夛紝闃叉鏂囦欢鍚姩鍚庤澶栭儴鏂扮▼搴忔洿鏂拌€岄伃鏃?backup 瑕嗙洊銆傚師鏂囦欢杩囧ぇ鎴栦笉鍙鍙仠鐢ㄨ嚜鍔ㄦ仮澶嶏紝涓嶇敤榛樿鍊兼浛浠ｃ€?
+- SettingsService 鏂板鍙€?previewRecovery/restoreBackup/retryRead锛屾部鐢ㄥ悓涓€浜嬪姟闃熷垪锛涙垚鍔熸仮澶嶅彂甯冩柊 ready document銆俽etryRead 鐪熸閲嶆柊璇诲彇褰撳墠鏂囦欢锛屼粎鎺ョ撼鏈夋晥鐨勭幇瀛樹富鏂囦欢锛涘師鍏堥樆鏂洰褰曞悗鏉ヤ富/澶囦唤閮芥秷澶辨椂缁х画 blocked锛屼笉褰撲綔鏂拌榛樿鍊笺€傞噸澶嶈鍙栨洿鏂?blocked reason/backupAvailable銆?
+- bootstrap 璁㈤槄 settings-recovered 鍚庝粎瀵规湭鎸傝浇瀹㈡埛绔噸璇曪紝澶嶇敤 epoch 闃叉棫鍒濆鍖栬鐩栵紱鎭㈠椤甸潰閿€姣佹椂鍙栨秷寮傛 DOM 鏇存柊銆侀€€璁?close銆傚彟涓€绐楀彛鎭㈠鍚庝袱涓?renderer 閮借兘鑷姩閲嶈瘯锛屼笉闇€瑕佸垱寤虹浜屼釜妯″瀷銆傛鏃舵病鏈夋椿璺冩棫妯″瀷锛屾仮澶嶆棫 revision 涓嶄細鍊掔亴鍒板凡鎸傝浇 store銆?
+
+### 楠岃瘉鍜岀幇鍦?
+
+鏂板 `settings-recovery.test.cjs` 15 椤癸細鍙棰勬銆佸瓧鑺備繚鍏?鏈夋晥澶囦唤涓嶈鐩栥€佷富鏂囦欢缂哄け銆佹湭鏉?schema/澶栭儴鍗囩骇銆佽繃鏈?閲嶆斁銆佸弻鏂囦欢鍙樺寲銆乺ename/fsync 鏁呴殰銆佹渶鍚庢椂鍒诲閮ㄤ慨鏀广€佹墜鍔ㄩ噸璇讳笉榛樿鍖栥€佹枃浠堕摼鎺ュ厓鏁版嵁鎷掔粷銆佺湡瀹炵洰褰?junction銆佽韩浠?鏂囨。鐢熷懡鍛ㄦ湡涓庣湡瀹為樆鏂〉纭/鍏崇獥銆傛枃浠堕摼鎺ュ垎鏀娇鐢ㄦā鎷?lstat 鍏冩暟鎹紝閬垮厤瑕佹眰 Windows 鏂囦欢绗﹀彿閾炬帴鏉冮檺锛涘疄闄?junction 鍗曠嫭鎵ц锛屼笉鎶婃ā鎷熷綋浣?OS 鏂囦欢閾炬帴瀹炴祴銆傚師 bootstrap 娴嬭瘯鏇存柊 DOM 瀹夸富鍜屾爣棰橈紝浠嶆墽琛岀湡瀹?bootstrap/鎭㈠椤点€?
+
+鏈€缁堝簲鐢?**668 椤癸細663 閫氳繃銆? 璺宠繃銆? 澶辫触**锛涙彃浠?**104/104**銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤轰笌涓変唤濂戠害妫€鏌ラ€氳繃銆? 椤?skip 浠嶄负鍘嗗彶 DS 杈撳叆鐢ㄤ緥銆?
+
+鏈満 `D:/Frankenstein/Uta-Workspace/operations/settings-recovery-2026-10-24/` 淇濆瓨 verify-final.mjs銆佷簲浠?*-results.json銆佹埅鍥俱€佹祴璇曟棩蹇楀拰 cleanup 璁板綍銆傛渶缁堟暟鎹?profile 涓?`settings-recovery-final-{corrupt,future,manual,external}-20261024`锛屼綅浜庝粨搴撳 runtime/profiles锛涘叏涓鸿嚜宸辨瀯閫犵殑鍏紑鍋忓ソ/鏃犳晥瀛楄妭澶瑰叿锛屼笉鍙栨寮忛厤缃€傚疄闄?Electron 浜旀鍚姩鍏?11 椤规鏌ワ細鍙岀獥鍙ｉ樆鏂笖闆舵ā鍨嬨€佹煡鐪?鍙栨秷闆跺啓銆佺‘璁ゆ仮澶嶅悗鍙岀獥鍙ｆ甯稿姞杞戒笌鍘熶欢 hash 涓€鑷淬€佹仮澶嶅悗鏂拌繘绋嬭鍙栥€佹湭鏉ョ増鏈笉闄嶇骇涓斿彲鍘熺敓鍏崇獥銆佹墜鍔ㄤ慨澶嶅悗 read 褰撳墠鏂板€笺€佸閮ㄥ崌绾у悗鏃?token 涓嶈鐩栥€?
+
+鏈€缁堣繘绋嬶細24500锛?2:48:55锛屾崯鍧忔仮澶嶏級銆?5912锛?2:48:57锛屾仮澶嶅悗閲嶅惎锛夈€?5928锛?2:49:15锛屾湭鏉ョ増鏈級銆?3276锛?2:49:17锛屾墜鍔ㄤ慨澶嶏級銆?3436锛?2:49:19锛屽閮ㄥ崌绾э級锛屽潎涓烘湰鏈?2026-10-24锛涜韩浠借褰曞湪鐩稿簲 process-*.json锛岄娆?corrupt 杩涚▼鍙﹀瓨 process-final-corrupt-before-restart.json銆傚叏閮ㄦ甯搁€€鍑猴紝cleanup 鐨?requiredResidualProcessCleanup 鍧囦负 false銆乪ndpointRemoved 涓?true锛?290/9291 宸叉棤鐩戝惉銆傝緝鏃╁洓娆¤瘯璺戜害閫€鍑猴紝娌℃湁鎸夊巻鍙?PID 鍋滃叾浠栬繘绋嬨€傛湰杞笉鑳借瘉鏄庝笂杞?Chromium 璋冭瘯娈嬬暀鏍瑰洜宸茶В鍐筹紝璐ㄩ噺璁板綍缁х画淇濈暀銆?
+
+鎴浘宸叉煡鐪嬶紝鎭㈠纭鍦ㄥ父瑙勮缃獥鍙ｅ昂瀵镐笅鍙銆佸彲鍙栨秷銆傛病鏈夋寮忚缃?妯″瀷鍐欏叆锛屾病鏈夊€欓€?ZIP 鎴栨棩甯哥増鏈洿鏂般€?
+
+## 鏈疆瀹屾垚锛氱湡瀹炴暟鎹幆澧冩爣绛句笌娣辫壊鏂囧瓧淇
+
+璧风偣 main `70533ee6e2971f416e32760edce3882ce9bd4bb8`銆俙services/environment-label.ts` 鍙姇褰?profile/packaged/isStable锛沵ain environment-info 澧炲姞鐪熷疄 isStable 瀛楁銆備粎 profile=stable 涓斾富杩涚▼纭姝ｅ紡鐩綍鏃舵樉绀衡€滄棩甯告暟鎹€濓紱婧愮爜鏄剧ず寮€鍙戝疄渚嬶紝鐙珛鎵撳寘鐜鏄剧ず鐙珛瀹炰緥锛屼俊鎭笉瓒虫樉绀烘暟鎹疄渚嬫垨鐜鏈‘璁わ紝璇诲彇澶辫触涓嶅洖鏄惧紓甯搞€傛病鏈夋妸 profile 鍚嶇О绛夊悓鍙戝竷楠屾敹銆?
+
+`SettingsWindowApp.vue` 鐨勯《閮?chip/瀵艰埅 footer 鍜?recovery-screen 鐨勬暟鎹幆澧冭鍧囦娇鐢ㄨ缁撴灉銆傞暱鏍囪瘑鏈夌渷鐣?瀹屾暣 title锛屾仮澶嶉〉鍏佽鎹㈣锛涚粍浠跺嵏杞藉悗蹇界暐杩熷埌缁撴灉銆傛煡鐪嬪疄闄呮埅鍥惧彂鐜?root/card 鏍囬浣跨敤鏈畾涔夌殑 --uta-text-primary/secondary锛屼娇娣辫壊涓嬬户鎵块粦瀛楋紝宸茬粺涓€鏀逛负鐜版湁 --uta-ink/secondary锛屾湭鏂伴€犵浜屽鑹叉澘銆?
+
+鏂板榛樿鐧昏 environment-label.test.cjs 5 椤癸紝瑕嗙洊绋冲畾/鐙珛/婧愮爜鍒嗙被銆乻table 鍚嶇О浣嗙洰褰曢潪姝ｅ紡銆侀潪娉?杩囬暱鏍囪瘑銆佹晱鎰熷瓧娈垫姇褰辨帓闄ゅ拰妗ュけ璐ャ€傚畬鏁村簲鐢?**673 椤癸細668 閫氳繃銆? 璺宠繃銆? 澶辫触**锛沶ode/web 绫诲瀷妫€鏌ャ€佹渶缁堟瀯寤洪€氳繃銆傛渶缁堝彧鏀圭ǔ瀹氭爣绛炬帾杈炲悗琛ヨ窇 5 椤癸紝鏈负 CSS/鏂囨閲嶅鎻掍欢娴嬭瘯锛涙彃浠朵笌濂戠害涓婅疆閫氳繃涓旀湰杞湭鏀圭浉鍏抽€昏緫銆?
+
+璇佹嵁 `D:/Frankenstein/Uta-Workspace/operations/environment-label-2026-10-24/`锛歷erify.mjs銆乶ormal/blocked-results.json銆佹繁娴?闃绘柇椤垫埅鍥俱€佹祴璇曟棩蹇椼€傚鐢ㄤ笂杞彈鎺?profile锛屽墠鍚?canonical 鏂囦欢瀛楄妭鐩稿悓锛涙甯搁〉鐪熷疄 header/footer 鎸囧悜瀹為檯 profile锛岄暱鏍囪瘑鏃犳í鍚戞尋鍘嬶紝闃绘柇椤垫爣璇嗘纭笖鏈潵鐗堟湰鎭㈠浠嶇鐢ㄣ€傛甯搁〉鏍囬/璇存槑/鍗＄墖璇存槑/鐜鏍囩鍦ㄦ繁娴呬袱绉嶄富棰樺叡 8 缁?computedStyle 瀵规瘮搴︽娊鏍?鈮?.5锛屾埅鍥惧凡鏌ョ湅锛涗笉鏄暣椤垫棤闅滅/鎵€鏈夎儗鏅強鎺т欢鐨勫畬鏁磋璇併€?
+
+鏈€缁堣繘绋?2752锛?026-10-24 鏈満 03:00:36锛夈€?380锛?3:00:38锛夊垎鍒娇鐢?settings-recovery-final-corrupt / future 鍙楁帶鏁版嵁锛岃韩浠借褰曚粎淇濆瓨鍦ㄦ湰杞?operations锛涙湭瑕嗙洊涓婅疆璇佹嵁銆備袱娆℃甯搁€€鍑猴紝cleanup.requiredResidualProcessCleanup=false锛岀鐐逛笌 9292/9293 娓呯悊銆傛寮?AppData/妯″瀷/ZIP/stable/鍘熷洓浠芥枃妗ｆ湭鏀广€傛湰杞?main 鍙ˉ璇婃柇瀛楁锛屼絾鏁翠綋寮€鍙戜綋楠屼粛闇€閲嶅惎浠ュ姞杞芥鍓嶆柊澧炵殑 main/preload API銆?
+
+## 鎺ョ潃鍋氫粈涔?
+
+1. 鎺ヤ笅鏉♀€滄棩甯稿叕寮€鍋忓ソ杩佺Щ鈥濆凡瀹屾垚鐨勭粨鏋滐紝鍑嗗鐙珛 ZIP 鍊欓€夛細骞插噣婧愮爜鏋勫缓銆佹潵婧?hash銆佽В鍘嬪惎鍔ㄣ€侀殧绂绘暟鎹殑鏂拌/鍗囩骇/鎭㈠楠岃瘉銆傜湡瀹?0.1.1 鏃ュ父鏁版嵁鍓湰銆佽法 origin/璺ㄥ疄渚嬪鍏ュ皻鏈獙鏀讹紝涓嶆妸婧愮爜 stable 澶瑰叿褰撴垚鎵撳寘鍗囩骇璇佹槑銆備笉寰楄鐩栧涓诲叏灞€ APPDATA銆佸啓鐪熷疄姝ｅ紡鏁版嵁鎴栨彁鍗囨棩甯哥櫥璁般€?
+2. 瀹屾暣 Live2D 鎺у埗灏氭湁澶ч噺寰呭姙锛氱湡瀹?SDK 閫愰樁娈佃建杩广€佹洿澶氶€氶亾鍙婅闊?鐪肩潧浠茶銆侀暱鏈?owner 杈圭晫涓庢€ц兘璁板綍銆傜幇鏈?headX 浠呬负鐭椂璇曢獙锛屼笉鑳藉澶栨爣鎴愰粯璁ゆ柊寮曟搸锛涚户缁鐢ㄥ彈鎺?DS锛屼笉纰版寮忔ā鍨嬶紝涓嶆浛鎹?PIXI銆?
+3. 鏃ф湇鍔?宸ュ潑鑽夌缁熶竴銆佽闊宠瘯鍚敊璇€佹寮忚缃縼绉讳笌鍊欓€?ZIP 缁х画鎸変富鏂规涓茶瀹炵幇銆傛棩甯告浛鎹粛绛夌敤鎴锋渶缁堥獙鏀讹紱褰撳墠鏃犱汉鍊煎畧鎺堟潈鍏佽缁х画寮€鍙?楠岃瘉鍜岀嫭绔嬪€欓€夛紝涓嶅厑璁镐吉閫犲閮ㄥ钩鍙版垨闊抽楠屾敹銆?
+
+鍚庣画鍙洿鏂?CURRENT銆佹湰鏂囦欢鍜屼富鏂规瀵瑰簲闃舵锛屼笉鎭㈠鎵归噺娲惧崟鎴栦笁骞冲彴鍚勫仛涓€閮ㄥ垎鐨勫畨鎺掋€?
+
+## 鏈疆瀹屾垚锛氭棩甯稿叕寮€鍋忓ソ杩佺Щ涓庢垚鍔熸爣璁?
+
+璧风偣 main `be58ff71aa78085af35f9ed248605b497903b561`锛岀粺涓€涓荤洰褰曞疄鏂姐€傚惎鍔ㄥ彧璇诲彇褰撳墠鍥哄畾 `settings-authority.v1.json`锛岀己澶变粛 legacy锛屼笉鍚姩 canonical store锛泂chema/scope/澶у皬/閾炬帴鎴栨牸寮忓紓甯稿潎杩涘叆 canonical-stable 鐨勯樆鏂姸鎬侊紝涓嶅洖閫€鏃у啓鍏ャ€傛湁鏁堟爣璁版墠鍒濆鍖?canonical-stable锛屽苟瑕佹眰瀹為檯鏂版枃浠跺瓨鍦紱涓㈠け main/backup 涓嶅啀绠楁柊瑁呫€傚紑鍙戞ā寮忎粛璧?canonical-dev銆?
+
+### 鎻愪氦椤哄簭涓庣晫闈?
+
+- `settings-store/stable-migration.ts` 绠＄悊鐙珛 pending store锛岀敤鎴风偣鍑昏縼绉婚妫€鎵嶅垱寤猴紝涓嶅奖鍝嶅湪璺戠殑 legacy authority/hover銆傚鐢ㄥ綋鍓?origin 涓ゆ潵婧愮櫧鍚嶅崟鍜岄€愬瓧娈甸妫€锛岀‘璁ゅ墠姣旇緝椤甸潰鏉ユ簮蹇収锛泃oken 浠嶇粦瀹?sender/frame/revision锛屾湁鏁堜袱鍒嗛挓銆佸崟娆′娇鐢紝寮傛 getStore 涔嬪墠鍗虫秷鑰楃‘璁?token锛岄伩鍏嶅苟鍙戦噸澶嶃€?
+- `SettingsService.ensurePersisted` 閫氳繃鍚屼竴闃熷垪纭繚棰勬淇宸茶惤鐩橈紝鏂囦欢琚閮ㄦ浛鎹㈠垯鎷掔粷锛涙棤鏉ユ簮纭涔熷疄闄呭啓 defaults + rollback backup銆傞殢鍚庡鐗堟湰/鍏紑鍋忓ソ scope/鍒濆 revision/瀹屾垚鏃堕棿鐨勬爣璁扮嫭鍗犲啓涓存椂鏂囦欢銆乫sync锛屼互 hard link 鍘熷瓙钀藉悕涓斾笉瑕嗙洊宸叉湁鏈潵鏍囪锛屾竻鑷湁涓存椂鏂囦欢銆備粎閫傜敤浜庢敮鎸佽鎿嶄綔鐨勬湰鍦版枃浠剁郴缁燂紱澶辫触鏄庣‘淇濈暀 legacy锛屽彲閲嶈瘯锛屼笉浠ュ啓浜嗕竴閮ㄥ垎澹扮О杩佺Щ瀹屾垚銆?
+- 鏂囨。鍏堟彁浜ゃ€佹爣璁板悗鎻愪氦锛涙爣璁板け璐ユ椂宸插啓鍏ョ殑鏂囨。/鏀舵嵁淇濈暀銆傞噸鏂伴妫€璺宠繃鐩稿悓鏉ユ簮锛屾部鐢ㄥ綋鍓嶅€煎畬鎴愭爣璁帮紝涓嶉噸澶嶅鍏ユ垨瑕嗙洊鍘熷浠姐€傛帴鍙楀悗鏈繘绋嬩粛 legacy锛岃缃〉鎻愮ず浠庢墭鐩橀€€鍑洪噸鍚紱閲嶅紑璁剧疆閫氳繃涓昏繘绋?settingsRestartRequired 鍐嶆樉绀鸿鎻愮ず銆備笅娆″惎鍔ㄤ袱涓湡瀹炵獥鍙ｉ兘鐢辨柊鏂囨。姘村悎銆?
+- `SettingsMigrationApp.vue` / `SettingsMigrationRecovery.vue` 鍦ㄥ畬鏁磋缃?Pinia/妯″瀷涔嬪墠鍒嗘祦銆傚垵娆℃棤鏉ユ簮鍒楀嚭鍗佷簩椤归粯璁?褰撳墠鍊硷紝蹇呴』涓诲姩纭銆俻ending 鏂囦欢琚樆鏂彲鏌ョ湅澶囦唤銆佸彇娑堛€佺‘璁ゆ仮澶嶆垨鎵嬪姩淇鍚庨噸鏂拌鍙栵紱鎭㈠鍘熶欢/鏈潵 schema 鐨勭幇鏈変繚鎶ゅ鐢紝鎭㈠鏈韩涓嶅啓鎴愬姛鏍囪锛岃繑鍥炶縼绉荤‘璁ゃ€俽ecovery IPC 鍙瑙嗗凡鐢遍妫€鎵撳紑鐨?pending store锛屼笉鑷姩寮€瀹冦€?
+- canonical Pinia 鐜板湪鍚屾椂鏀寔 dev/stable銆備竷椤规棫璇煶鏈嶅姟瀛楁鍙﹀啓 `deskpet/voice-service-v1`锛屽彧鎶曞奖杩欎竷瀛楁瑕嗙洊璇诲彇鏃ф湇鍔?fallback锛涘師 `deskpet/ui-state-biophilic-v1` / 鏇存棭璁板綍淇濇寔鍘熸枃锛屾柊鍏紑鍋忓ソ涓嶅啀琚暅鍍忓洖鍘汇€傝繖杩樹笉鏄富杩涚▼鏈嶅姟閰嶇疆鏉冨▉缁熶竴锛屼篃涓嶅寘鍚瘑閽ャ€?
+
+### 鏈€缁堥獙璇佸拰鐜板満
+
+鏂板 17 椤规祴璇曪細stable migration 15 椤广€佸疄闄?Pinia 涓ゆā寮忎繚鐣欐潵婧?鐙珛鏈嶅姟璁板綍/閲嶅缓姘村悎 2 椤广€傛渶缁堝簲鐢?**690锛?85 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**104/104**锛宯ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€佷笁濂戠害閫氳繃銆俶odel-migration 鐨?main 鍏ュ彛渚濊禆澶瑰叿琛ョ櫥璁颁簡鏂版ā鍧楋紱鍏舵ā鍨嬭縼绉昏涓烘鏌ヤ繚鐣欍€傛棩蹇楀湪鏈満 `operations/stable-migration-*.log`銆?
+
+鐪熷疄楠屾敹璇佹嵁锛歚D:/Frankenstein/Uta-Workspace/operations/stable-settings-migration-2026-10-24/`銆傛祴璇曞叆鍙ｅ湪鐙珛 Electron 杩涚▼ ready 涔嬪墠 `app.setPath('appData', <璇佹嵁鐩綍涓嬬殑闅旂鐩綍>)`锛屽姞杞界湡瀹?app/out/main锛涙病鏈夋敼瀹夸富 APPDATA锛屼篃娌℃湁鎶婁复鏃?UTA_USER_DATA_DIR 鍐掑厖 stable銆傚疄闄?resolver/IPC 纭 isStable=true銆傚叚涓垚鍔熷満鏅叡 18 椤癸細fresh/restart/empty/future/lost/interrupted锛屽惈鐪熷疄鎸夐挳銆佹簮鍙樻洿鎷︽埅銆佽縼绉婚噸鍚?鏂颁繚瀛樷啋瀹犵墿鍚屾銆佹爣璁伴棬鎺с€佺己澶辨枃浠躲€侀潪 UTF8 鎹熷潖鍘熶欢閫愬瓧鑺備繚鐣欍€佹仮澶嶅悗纭鍙婂畬鎴愬悗鍏崇獥閲嶅紑銆?
+
+浠呭叚涓渶缁堟垚鍔熷満鏅鍏ラ€氳繃銆傛渶鍒濆寘瑁呭櫒浣跨敤閿欒鐨?Electron 妯″潡瀵煎叆瀵艰嚧鍏ュ彛寮傚父锛堜繚鐣?failed-wrapper 鏃ュ織锛夛紝涓€娆￠噸鍚剼鏈敤閿欒鎸夐挳鏂囧瓧澶辫触锛堜繚鐣?restart-attempt1 杩涚▼璁板綍锛夛紱浜岃€呬慨姝ｅ悗閲嶈窇銆傚け璐ユ祴璇曞疄渚嬬殑杩涚▼娈嬬暀鎸夋湰杞疄闄呰矾寰勪笌鍒涘缓鏃堕棿鏍稿鍚庢竻鐞嗭紱杩欎笉鏄€€鍑鸿川閲忛€氳繃銆傚叚涓垚鍔熷満鏅湰韬甯搁€€鍑猴紝鏈€鏂?cleanup 鏂囦欢鍧?false锛涚鐐逛笌 9294/9295 宸叉竻鐞嗐€傚巻鍙?PID 涓嶄綔涓哄悗缁仠姝緷鎹€?
+
+杈圭晫锛氳繖鏄柊璁剧疆鐨勫綋鍓?origin 鍗佷簩椤瑰叕寮€鍋忓ソ杩佺Щ涓庢簮鐮?true stable 鍒嗘敮楠屾敹锛屽皻闈炲叏鏉ユ簮杩佺Щ銆佺湡瀹炴棫鏃ュ父鍓湰鍗囩骇鎴?ZIP 楠屾敹銆傛ā鍨?棰勮銆佸涓汇€佸姞瀵嗗瘑閽ヤ粛鍘熸湁瀛樺偍銆傛寮忔暟鎹€佹寮?DS銆佸洓浠藉師鏈夎剰鏂囨。銆乻table.json 涓庢棩甯?0.1.1 exe/ZIP 鏈彉銆備笅涓€杞湪骞插噣鏋勫缓鐩綍浜у嚭鐙珛鍊欓€夛紝涓嶆彁鍗囨棩甯革紱鎸佺画鎺ㄨ繘鍏朵粬鏃㈠畾浠诲姟銆?
+
+## 鏈€鏂扮幇鍦猴細0.2.0-alpha.1 宸叉瀯寤猴紝exe 鍚姩楠屾敹澶辫触
+
+瀹炵幇鎻愪氦 `f6590ba`锛岀増鏈?鎺堟潈/鏋勫缓璇存槑鎻愪氦 `181dce4`锛岀嫭绔嬩綋楠屽叆鍙ｆ彁浜?`5860a244031e39ef1fd26c68d2bc51e64abea545`銆傜粺涓€涓荤洰褰曚粛 main锛屽洓浠藉師鑴忔枃妗ｆ湭鍔ㄣ€傚簲鐢ㄧ増鏈繘鍏?alpha 骞朵笉琛ㄧず鏃ュ父 exe 宸叉敼鍙樸€?
+
+- 鏋勫缓鍖猴細`D:/Frankenstein/Uta-Workspace/build/codex-020-alpha1`锛宒etached HEAD `5860a24`锛岀嫭绔?npm ci 渚濊禆锛屾棤鐩綍閾炬帴銆傚簲鐢ㄧ殑 worktree 宸ュ叿鏈瘑鍒埗绾ч潪 Git 宸ヤ綔鐩綍锛屽洜姝や娇鐢?Git worktree 鍒涘缓锛涙湭鎭㈠鏃?Worker 鐩綍銆傝鏋勫缓鍖轰繚鐣欎緵澶嶇幇锛屼笉鑳藉綋绗簩寮€鍙戝叆鍙ｏ紱婧愮爜淇浠嶅湪涓荤洰褰曟彁浜ゅ悗鍐嶆洿鏂版瀯寤哄尯銆?
+- 鏈€缁?ZIP锛氭瀯寤哄尯 `app/release/Uta-0.2.0-alpha.1-win-x64.zip`锛汼HA256 `5ce00c1787611e9f90ff07b0fef0155c1a2eda399148d69eef948c7313d2ac96`锛宮anifest 鍚岃矾寰勫姞 `.manifest.json`锛宻ource dirty=false銆傞杞?`181dce4` 鍖呬粎浣滀腑闂翠骇鐗╋紝鏈€缁堢敤 `5860a24`銆?
+- 瑙ｅ帇锛歚D:/Frankenstein/Uta-Workspace/artifacts/candidate-0.2.0-alpha.1-5860a24/`銆傛鏌ュ疄闄呭寘鍚?Uta.exe銆丗IRST-READ.md銆丩ICENSE-Uta.txt銆乀HIRD_PARTY_LICENSES.md銆乀ry-Uta.bat锛沘sar 鍏?59 鏉¤矾寰勶紝淇濈暀 Hiyori ReadMe锛屾湭鍚?can3/cmo3銆備富婧愮爜鐨勬牴 start-uta.bat 鍜?stable.json 涓嶅彉銆俆ry-Uta.bat 鐨勬暟鎹浐瀹氬湪璇ュ€欓€夌嫭绔嬬洰褰曪紝涓嶄娇鐢ㄦ寮?AppData/uta锛涗粛涓嶆妸鍚姩鍣ㄥ瓨鍦ㄨ涓哄彲鐢ㄨ瘉鏄庛€?
+- 鏋勫缓鏃ュ織锛歚operations/candidate-020-alpha1-{install,build-final}.log`銆備富瑕侀獙鏀剁幇鍦猴細`operations/packaged-candidate-020-alpha1/`銆傛棫 0.1.1 ZIP hash 涓?stable 鐧昏涓€鑷达紝鍙﹁В鍘嬪埌璇ョ幇鍦虹殑 old-011-fixture锛屾病鏈夊惎鍔ㄦ垨淇敼鍘熸棩甯哥▼搴忕洰褰曘€?
+- **鏈€氳繃**锛氭柊銆佹棫瑙ｅ帇 exe 鍧囧緢鏃╅€€鍑?`0x80000003`锛屾棤 runtime 绔偣/搴旂敤鏃ュ織锛岀湡瀹炴棫鐗堟暟鎹皻鏈敱鏃?exe 鎴愬姛鐢熸垚锛屾晠鈥滄墦鍖呯増鍗囩骇娴嬭瘯鈥濇病鏈夐€氳繃銆傚甫/涓嶅甫璋冭瘯鍙傛暟鍧囧鐜帮紱鑾峰緱 fatal exception 鏍堬紝瑙?probe5-result.json銆備笉鍙€氳繃淇敼 settings/鍒犻櫎鐢ㄦ埛鐩綍绛夌洸璇曞幓鎺╃洊銆?
+- 鍘熺敓鏈€灏忓鐜帮細`native-repro/` 浠庣幇鏈夊畼鏂?Electron 34.5.8 runtime 澶嶅埗鍒拌嚜宸辩殑鐩綍锛屽彧鏈夊啓涓€浠芥祴璇曟爣璁板苟閫€鍑虹殑鍏ュ彛锛沘sar 鍜屾櫘閫?resources/app 涓ょ甯冨眬閮藉湪 JS 鎵ц鍓嶅悓鏍烽€€鍑猴紝main-executed.json 鏈敓鎴愩€傚€欓€?.text/.rdata 绛夋墽琛岃妭涓庡師濮?Electron 鐩稿悓锛宖use 瀹樻柟宸ュ叿璇诲彇涓€鑷达紝鍘熺敓 DLL/璧勬簮/locale hash 涓€鑷达紱浠呰祫婧愮増鏈?鍥炬爣绛?.rsrc 涓嶅悓銆俁unAsNode 鍙繍琛岋紝浣嗕笉鏄闈㈤獙鏀躲€傚彧璇存槑鏁呴殰鍙嫭绔嬩簬 Uta 浠ｇ爜澶嶇幇锛屽皻鏈畾浣嶆牴鍥犮€?
+- 瀵圭収锛氫娇鐢ㄦ簮鐮佺殑 Electron.exe 鏄惧紡鍔犺浇鏈€缁堝€欓€?asar 鍙惎鍔紝杩涚▼鐜/璺緞瑙?asar-probe-result.json锛涜繖鏄紑鍙戣繍琛屾柟寮忥紝**涓嶈兘鏇夸唬瑙ｅ帇 Uta.exe 楠屾敹**銆傝鎺㈤拡鎸夊疄闄?profile銆佽矾寰勪笌鍒涘缓鏃堕棿鏍稿疄鍚庢甯搁€€鍑猴紝asar-probe-cleanup.json forced=false锛?296/9297 涓庣鐐瑰凡娓呯悊銆傛棫銆佹柊鏃╅€€鎺㈤拡鍧囧凡閫€鍑猴紱涓€娆℃棤鍥炴墽鐨勭埗 shell 鎺㈤拡鐢卞叾宸ュ叿浼氳瘽涓柇锛屾湭鎸夊巻鍙?PID 鏉€杩涚▼銆?
+
+鏈夊悓绫诲師鐢熷惎鍔ㄧ幇璞＄殑澶栭儴绾跨储锛歔Electron issue](https://github.com/electron/electron/issues/51770)銆乕DSH discussion](https://github.com/deepseek-ai/deepseek-harness/discussions/10067)銆傜増鏈?鏍堝苟涓嶅畬鍏ㄧ浉鍚岋紝鍙綔鍚庣画鍋囪鏉ユ簮锛屼笉璁ゅ畾鍚屼竴鏁呴殰銆備笉涓烘墦鍖呴€氳繃鑰屽叧闂?sandbox銆佹敼鍙樺叏灞€瀹夊叏瑙勫垯鎴栦慨鏀圭郴缁熺幆澧冦€備笅涓€娆¤瘖鏂繀椤昏鏄庢柊澧炰簡浠€涔堝彲妫€楠屽亣璁撅紝閬垮厤閲嶅涓婅堪鐭╅樀銆?
+
+## 鍚庣画鐩存帴鎵ц鍏ュ彛
+
+鐢ㄦ埛宸插喅瀹氱户缁敱褰撳墠 Codex 鎵ц锛屼笉鎹?Luna锛屼笉鎭㈠澶栭儴 Agent 鍒嗗伐銆傚厛璇?AGENTS 鈫?CURRENT 椤堕儴 鈫?鏈妭锛屽啀鎸夊疄闄?Git/杩涚▼鏍稿鐜板満銆傛€昏矾绾胯冻浠ヨВ閲婁骇鍝佹柟鍚戯紝浣嗕笉鑳芥妸 0.3鈥?.0 鐨勬潯鐩綋浣滃凡鍐荤粨鐨勮缁嗗疄鐜般€備竴娆″彧鍋氫竴涓彲楠屾敹鐩爣锛屾祴璇?鐪熷疄鎿嶄綔/鎻愪氦/鏇存柊鏈枃浠跺悗缁х画锛涗笉瑕侀噸鏂伴€氳鍏ㄤ粨鎴栧鍋氬凡瀹屾垚杩佺Щ銆?
+
+### 宸插畬鎴愶細棰勮浼樺厛淇濈暀鐢ㄦ埛鐗堟湰锛屽仠姝㈣嚜鍔ㄥ啓鍏变韩妯″瀷
+
+鐢ㄦ埛鍙鐩爣锛氫慨鏀硅嚜宸辩殑棰勮鍚庨噸杞戒粛淇濈暀锛涗袱涓殧绂诲疄渚嬩娇鐢ㄥ悓涓€涓ā鍨嬫椂浜掍笉鏀瑰啓妯″瀷鏃佹枃浠躲€傝鏁版嵁姝ｇ‘鎬т慨澶嶅師宸茬撼鍏ヤ富鏂规宸ュ潑/鍗囩骇绾︽潫锛屽彲浠ュ厛浜庡彈闃荤殑鍊欓€夐獙鏀舵墽琛屻€?
+
+鍏ュ彛涓庡凡鏍稿疄闂锛?
+
+1. `app/src/renderer/stores/deskpet.ts` 鐨?persistPresetsMap 褰撳墠鍏堝啓褰撳墠 origin 鐨?STATE_PRESETS_KEY锛屽啀鑷姩璋冪敤 saveModelPresets锛涘瓨鍌?IPC 澶辫触琚悶銆俥nsureModelPresetsSeeded 褰撳墠鎬昏闈炵┖ diskPresets 瑕嗙洊鏈湴宸茬紪杈戞《锛屽彲鑳藉湪閲嶈浇鏃朵涪鎺夋柊缂栬緫銆?
+2. `app/src/main/index.ts` 鐨?saveModelPresetsToDisk 鐩存帴鎶?deskpet-presets.json 鍐欏湪妯″瀷鏃侊紱save-model-presets IPC 鏈檺鍒?sender锛屼笖涓嶆槸鍘熷瓙鍐欍€傛ā鍨嬫梺鐨勬棫鏂囦欢搴斿綋鍙綔绉嶅瓙/鏃ф潵婧愶紝鏈疆涓嶅啀鑷姩闀滃儚鍐欏叆銆?
+3. 璇诲彇 `model-path-safety.ts`銆乣useStageModelLifecycle.ts` 鐨勬ā鍨嬭鍙栬皟鐢ㄩ摼锛屼互鍙婂疄闄呭伐鍧婁繚瀛樿皟鐢ㄦ柟锛涚敤 rg 瀹氫綅娴嬭瘯涓殑 saveModelPresets / ensureModelPresetsSeeded / preset persistence锛屽啀鍋氳寖鍥存槑纭殑鏈€灏忎慨澶嶏紝涓嶆惉杩佹垨鍒犻櫎鍘熸ā鍨嬫枃浠躲€?
+
+鏈疆鍐荤粨琛屼负锛?
+
+- 鎸夆€滄湰 profile 宸蹭繚瀛樼殑妯″瀷妗讹紙鍖呮嫭鏄惧紡绌烘暟缁勶級鈫?妯″瀷鏃佹棫棰勮/榛樿绉嶅瓙鈥濊鍙栵紱鏈湴妗跺凡瀛樺湪鏃讹紝涓嶅緱琚棫鏃佽溅瑕嗙洊銆傜幇鏈夊伐浣滅姸鎬侀璁捐ˉ绉?杩佺Щ鏍囪闇€鍗曠嫭鍥炲綊锛屼笉寰楁瘡娆￠噸杞芥妸鐢ㄦ埛鍒犻櫎椤瑰姞鍥炪€?
+- 鍙栨秷鑷姩鎶婄敤鎴蜂慨鏀瑰啓鍏ユā鍨嬬洰褰曪紱涓昏繘绋嬫棫 IPC 涓嶈兘淇濈暀涓€鏉′粛鍙嚜鍔ㄥ啓鍏变韩妯″瀷鐨勬梺璺€傚吋瀹规棫鏂规硶鏃舵槑纭繑鍥炲け璐?涓嶆敮鎸侊紱灏嗘潵鏄惧紡瀵煎嚭鍙﹁璁★紝涓嶅湪姝よ疆寮€鏀句换鎰忚矾寰勩€?
+- 鏈疆鍙互鏆傜敤宸插瓨鍦ㄧ殑褰撳墠 profile/origin 鏈湴棰勮瀛樺偍锛屽啓娓呮槸杩囨浮鏂规锛涗笉瑕佹湭缁忚璁℃墿鍏呭崄浜岄」鍏紑鍋忓ソ schema 鎴栨妸浠绘剰妯″瀷/棰勮 JSON 濉炲叆璇ュ绾︺€傝嫢闇€瑕佹妸棰勮杩佸埌涓昏繘绋嬫枃浠讹紝杩欐槸涓嬩竴杞湁鐗堟湰/妯″瀷鏍囪瘑/骞跺彂/鍥炴墽鐨勬柊濂戠害锛屼笉涓村満娣峰叆銆?
+- 淇濆瓨澶辫触蹇呴』鍙锛屼繚鐣欏緟淇濆瓨鍐呭骞惰兘閲嶈瘯锛涗笉鑳界户缁粰鍑轰繚瀛樻垚鍔熴€傚厛杩藉疄闄呭伐鍧婅皟鐢ㄥ叧绯伙紝鍐嶉€夋渶灏忕姸鎬佹帴鍙ｏ紝閬垮厤鎵€鏈夊悓姝ュ姩浣滀复鍦烘敼鎴愬紓姝ヨ€岀牬鍧忓凡楠岀殑鎵ц鍥炴墽銆?
+
+楠屾敹蹇呴』鍚細鏃ф梺杞﹀拰鐢ㄦ埛妗朵笉鍚岀殑閲嶈浇淇濈暀銆佹樉寮忕┖妗躲€佹棤鐢ㄦ埛妗剁殑鏃х瀛愬吋瀹广€佺敤鎴锋敼瀹岄噸鍚繚鐣欍€佷袱涓嫭绔?profile 浣跨敤鍚屼竴鍙妯″瀷鏃舵墍鏈夋ā鍨嬫枃浠?hash 涓嶅彉銆佸啓鍏ュけ璐ヤ繚鐣欒崏绋?閲嶈瘯銆備复鏃剁洰褰?妯″瀷鍓湰楠岃瘉鍗冲彲锛屼笉纰版寮?DS銆傛墽琛屽彈褰卞搷琛屼负娴嬭瘯銆乼ypecheck銆乥uild锛涜寖鍥存秹鍙?main/preload/store 鍚庡啀璺戝畬鏁村簲鐢?鎻掍欢/鍏变韩濂戠害銆傜湡瀹?UI 浠嶅湪寮€鍙?Electron 涓獙锛屾槑纭€欓€?exe 灏氭湭閫氳繃銆?
+
+涓嬩竴杞畬鎴愬悗锛岀户缁湇鍔￠厤缃崏绋夸笌閿欒/鍏抽棴鎻愮ず鐨勫崟棰嗗煙鏀跺熬锛屽啀琛ラ敭鐩?缂╂斁/绌烘€佺瓑灞€閮ㄤ綋楠屻€傛瘡涓柊棰嗗煙鍏堝湪鏈枃浠跺啓娓呭瓧娈点€佸綋鍓嶆潵婧愩€佷繚瀛?澶辫触琛屼负鍜屽疄闄呴獙鏀舵楠わ紝鍐嶅疄鏂姐€傚師鐢熷惎鍔ㄦ牴鍥犮€佸畬鏁?Live2D 浠茶鏇挎崲銆佽法鏉ユ簮/瀵嗛挜杩佺Щ鍜屾渶缁堝彂甯冨睘浜庨渶瑕佹洿寮哄鏍哥殑鑺傜偣锛涘嚭鐜版湭棰勬湡鐨勮法鐩綍鍐欏叆銆佸崗璁敼鍙樻垨鏃犳硶瑙ｉ噴鐨勫洖褰掓椂淇濈暀鐜板満锛屽厛鎶ュ憡鍑嗙‘璇佹嵁锛屼笉闈犳墿澶ф敼鍔ㄨ寖鍥粹€滀慨鍒版祴璇曠豢鈥濄€?
+
+### 鏈疆缁撴灉锛氶璁句繚瀛樹笌闅旂
+
+璧风偣涓荤洰褰?main `1292a5e9018648147304851f180e2a1133448755`銆備笂鏂归棶棰樺畾浣?鍐荤粨琛屼负淇濈暀浣滃疄鏂戒緷鎹紝浠ヤ笅涓烘渶鏂颁簨瀹烇紝涓嶉噸娲捐杞細
+
+- 鏂?`services/preset-persistence.ts` 鍙搷浣滃綋鍓?origin 鐨勬棦鏈?`deskpet/state-presets-v3`銆傛湁鐣?4 Mi 瀛楃璇诲彇銆佸璞?妗?鏉＄洰妫€鏌ワ紱閿欒淇濇寔鍘熻褰曪紝鎷掔粷鏂伴粯璁よ鐩栥€傛瘡娆＄紪杈戝墠閲嶆柊璇诲彇骞朵互鏈€鏂板畬鏁?map 鍚堝苟褰撳墠妗讹紝鍑忓皯鏃х獥鍙ｈ鐩栧叾浠栨ā鍨嬫《锛涜繖涓嶆槸鍚屾ā鍨嬪鍐欒€呯殑浜嬪姟/CAS 淇濊瘉銆傞暱鏈熶粛闇€涓昏繘绋嬮璁捐鐩栧绾︺€?
+- Store 浠庢湰鍦版《锛堝惈绌烘暟缁勶級璇昏捣锛屾病鏈夋《鎵嶅彇鍙鏃佽溅/榛樿绉嶅瓙銆傞娆￠潪绌烘梺杞﹀彲琛ョ己鐨勫伐浣滅姸鎬佺粍锛屽凡鏈夌敤鎴锋《姘镐笉琛ュ洖銆傛棫 working-preset-migration 璁板綍淇濈暀浣嗕笉鍐嶅啓锛屼笉浠ュ崟鐙?marker 鐨勫崐鎴愬姛鎺у埗鏄惁鍔犲洖鐢ㄦ埛鍒犻櫎椤广€傝鍧忚褰曞彧缁欓敊璇紝涓嶅啓榛樿銆?
+- 鎴愬姛 storage.setItem 鍚庢墠鏇挎崲杩愯鍒楄〃锛涘け璐?saveCustomPreset=null/delete=false/restore=null锛屽師鍒楄〃銆乸in 涓庣紪杈戝櫒鑽夌淇濇寔銆係ettingsPanel 鍙湁鎴愬姛鎵嶈В闄ょ紪杈戦攣/鍒囩紪杈戝璞★紱宸ュ潑鍜岀姸鎬侀〉鍧囨樉绀虹嫭绔嬩繚瀛樼粨鏋溿€俙save-model-presets` 鏃?IPC 鏄庣‘杩斿洖 false锛屽垹闄ゅ師妯″瀷鏃佸啓鍏ュ疄鐜帮紱preload 淇濈暀寮冪敤鍏煎绛惧悕锛屼笉寮€鏀炬柊瀵煎嚭璺緞銆?
+- Store 璁㈤槄褰撳墠 localStorage 鐨?storage 浜嬩欢鍚屾瀹犵墿/璁剧疆锛宒ispose 瑙ｇ粦锛涙棫 reload-settings 鐨勯潪鍏紑閲嶈涔熷埛鏂伴璁俱€?*鏈€缁堟病鏈夊鍔犻澶栨ˉ鎺ラ€氱煡鎴栦繚瀛樼増鏈瓧娈?*銆傛棭鏈熻剼鏈鎶?editingGroup 杈撳叆妗嗗綋 customPresetName锛屽鑷存寜鍚嶇О鏌ユ壘澶辫触锛涘凡鏇存涓?preset-name-input锛屽苟鎾ゆ帀璇曞姞鐨勬ˉ鎺ヨ矾寰勩€備笉鑳芥妸璇ユ祴璇曢敊璇啓鎴愪骇鍝佸瓨鍌ㄤ簨浠舵晠闅溿€?
+- 鏂板 12 椤瑰疄闄?helper/Pinia 琛屼负娴嬭瘯锛屾渶缁堝簲鐢?**702/697 閫氳繃/5 璺宠繃/0 澶辫触**锛涙彃浠?**104/104**銆佺被鍨嬨€佹瀯寤恒€佷笁濂戠害閫氳繃銆傛棩蹇?`operations/preset-persistence-{scoped,app-tests,plugin-tests,typecheck,build}.log`銆傜幇鏈?5 涓湡瀹?DS 璺宠繃浠嶅崟鍒椼€?
+- 鏈€缁堢湡瀹為獙鏀跺湪 `operations/preset-persistence-final-2026-10-24/`锛欰/B 涓や釜鐙珛 profile 鍏辩敤浠撳簱 Hiyori runtime锛岀涓夋閲嶅惎 A锛涘叡 9 椤规鏌ラ€氳繃锛屽寘鎷疄闄呮粦鍧楅瑙堝悗娉ㄥ叆 quota 閿欒鈫掔偣鍑讳繚瀛樷啋鑽夌/閿?鍘熷€间繚鐣欌啋閲嶈瘯鈫掑疇鐗╁悓姝ャ€佽缃埛鏂般€佹棫 IPC 鎷掔粷銆佸悇鑷暟鎹殧绂汇€傛瘡娆℃牳瀵瑰叏閮ㄥ叡浜?runtime 鏂囦欢 SHA256 涓€鑷达紝鏈敼姝ｅ紡 DS/妯″瀷銆傛渶缁堜笁涓獙璇佸疄渚嬫甯搁€€鍑猴紝cleanup.forced=false锛?298/9299 涓庣鐐规竻鐞嗐€?
+- 鏃╂湡澶辫触鑴氭湰/杩涚▼韬唤璁板綍鍦?`operations/preset-persistence-2026-10-24/`锛屼粎渚涜拷婧紝涓嶈閫氳繃銆備竴娆￠攢姣佺獥鍙ｅ悗鐨勮皟璇曡繘绋嬫畫鐣欐寜鏈瀹為檯璺緞/鍒涘缓鏃堕棿娓呯悊锛涗笉鑳藉€熸渶缁堜笁娆℃甯搁€€鍑鸿瀹氬巻鍙查€€鍑鸿川閲忛棶棰樺凡瑙ｅ喅銆?
+
+姝ｅ紡 AppData銆佹寮忔ā鍨嬨€佹棩甯?0.1.1 鍜?stable 鐧昏銆佸洓浠藉師鑴忔枃妗ｄ笉鍙橈紱鍊欓€?exe 鍚姩浠嶆湭閫氳繃銆備笅涓€姝ュ彧鎺ㄨ繘璇煶鏈嶅姟淇濆瓨鏂瑰紡涓庨敊璇?鍏抽棴鑽夌鐨勪竴鍧楋紝涓嶉噸澶?native 璇婃柇鎴栭璁捐縼绉汇€?
+
+### 宸插畬鎴愶細STT 淇濆瓨涓嶅悶鏂拌緭鍏ワ紝浜戞湇鍔′笉澶嶇敤鍒瀵嗛挜
+
+鍩虹嚎 main `b7790d0`銆傚彧鏀?SttSettingsSection銆丼TT 鍚堝苟閰嶇疆鐨勭函鍑芥暟鍙婃帴绾?琛屼负娴嬭瘯锛屼笉璋冪敤澶栭儴璇嗗埆鏈嶅姟鎴栭害鍏嬮銆傛櫘閫氳繛鎺ュ瓧娈典繚鎸佽嚜鍔ㄤ繚瀛橈紱瀵嗛挜鍙€氳繃鏄庣‘淇濆瓨鎻愪氦銆傝鍙栧け璐ョ鐢ㄧ紪杈戝苟鍙噸璇曪紱鎱繚瀛樺彧鍥炲～鏈鍚庣画杈撳叆鏀瑰彉鐨勫瓧娈碉紝淇濆瓨涓殑鍚庣画鏇存敼涓茶琛ュ啓锛屽け璐ヤ繚鐣欒緭鍏ュ苟鎻愪緵閲嶈瘯锛岀寮€椤甸潰鏃跺彧鏀跺熬鏅€氳繛鎺ュ瓧娈碉紝涓嶈嚜鍔ㄦ彁浜ゆ湭淇濆瓨瀵嗛挜銆傚垏鎹?backend 鎴栦簯鎺ュ彛 origin 鏃舵竻鏃у瘑閽ワ紝鏄庣‘杈撳叆鐨勬柊瀵嗛挜闄ゅ銆係TT 鐨勬€诲紑鍏充粛榛樿 false锛宎utoSend 榛樿 false銆?
+
+楠屾敹锛氬疄闄呯粍浠舵參鍥炴墽/淇濆瓨鏈熼棿鏂拌緭鍏?鍐嶆淇濆瓨銆佸垵濮嬪寲澶辫触閲嶈瘯銆佷笉鑷姩鎻愪氦鑽夌瀵嗛挜銆佸垏鍚庣鎴?origin 涓嶅甫鏃у瘑閽ャ€佸け璐?娓呴櫎寮傚父涓嶆毚闇插師濮嬮敊璇€佺粍浠跺嵏杞借繜鍒板洖鎵т笉鏀瑰悗缁〉闈紱鍐嶅仛闅旂 Electron UI 鐘舵€佷笌鏈満閰嶇疆 IPC 楠屾敹锛屼笉鎶婅繖杞畻鎴愮湡瀹炲綍闊?璇嗗埆閫氳繃銆傚伐鍧?鏈嶅姟鏈繚瀛樺瘑閽ョ殑缁熶竴鍏抽棴纭浠嶆槸鍚庣画浜嬮」锛屼笉澹扮О鏈疆宸茶鐩栥€?
+
+瀹炵幇涓庣粨鏋滐細
+
+- `main/stt.ts` 鏂板 `mergeSttConfig`锛屽尯鍒嗘棫鏂囦欢瀹藉璇诲彇涓庝富鍔ㄤ繚瀛樻牎楠岋紱涓诲姩淇濆瓨鎷掔粷鍧?URL銆侀潪 HTTP(S)銆乁RL 鍑嵁鍜岄潪鍥炵幆鏈湴鎺ュ彛锛屼笉鍐嶆倓鎮勬崲榛樿鍊煎悗杩斿洖鎴愬姛銆傛棫瀵嗛挜鍙繚鐣欑粰鍚?backend/浜戞帴鍙?origin锛屾槑纭柊瀵嗛挜鎴?clearKey 浼樺厛锛涘師鍔犲瘑鏂囦欢鍐欏叆璺緞涓嶅彉銆?
+- `SttSettingsSection.vue` 璇诲彇澶辫触绂佺敤琛ㄥ崟/鍙噸璇伙紱鏅€氬瓧娈佃嚜鍔ㄤ繚瀛橈紝瀵嗛挜浠呮槑纭寜閽彁浜ゃ€傛參鍥炴墽鍙洖濉粛涓庤姹傜浉鍚岀殑瀛楁锛屽悗缁緭鍏ヤ覆琛岃ˉ鍐欙紱鎹㈡湇鍔′笉鍥炲～鏃у瘑閽ョ姸鎬併€傞敊璇繚鐣欒緭鍏ワ紝鐢ㄥ浐瀹氭彁绀轰唬鏇垮師濮嬪紓甯搞€傞〉闈㈠嵏杞藉彧鏀跺熬鏅€氬瓧娈碉紝杩熷埌鍥炴墽涓嶆敼鍗歌浇鍚庣殑鐘舵€併€?
+- `services/stt-config-queue.ts` 鍦ㄥ悓涓€娓叉煋杩涚▼鍐呰法缁勪欢閲嶅缓涓茶鍖栭厤缃鍐欙紝閬垮厤鏃ч潰鏉挎敹灏惧啓鍏ヨ鐩栨柊闈㈡澘鍒濆鍖栥€備笉鏄法杩涚▼鐗堟湰鍖栦簨鍔★紝涔熶笉鏄湇鍔″叏瀛楁缁熶竴杩佺Щ銆傜寮€椤甸潰涓嶄細鑷姩淇濆瓨鏈彁浜ゅ瘑閽ワ紝鐩墠鐢ㄦ槑纭枃瀛楁彁绀猴紝涓嶅０绉板凡鏈夊叧闂‘璁ゃ€?
+- 鏂?`stt-settings-save.test.cjs` 9 椤瑰凡鐧昏榛樿濂椾欢锛涙渶缁堝簲鐢?**711 椤癸紙706 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**104/104**銆乶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤哄拰涓夊绾﹂€氳繃銆傛棩蹇?`operations/stt-save-{scoped,app-tests,plugin-tests,typecheck,build}.log`銆傛彃浠跺湪琛ヤ弗鏍?URL 鏍￠獙鍓嶅凡閫氳繃锛涜琛ヤ竵涓嶆敼鎻掍欢璺緞銆?
+- 鏈€缁堢湡瀹為獙鏀?`D:/Frankenstein/Uta-Workspace/operations/stt-save-final-2026-10-24/`锛歱rofile `stt-save-final-a-20261024`锛屽垵娆′笌閲嶅惎鍏?7 椤规鏌ラ€氳繃銆傜湡瀹炶緭鍏?鎸夐挳纭锛氬垵娆℃墦寮€涓嶅啓榛樿鏂囦欢銆佽嚜鍔ㄤ繚瀛樹笉鎻愪氦瀵嗛挜鑽夌銆佹槑纭繚瀛樺姞瀵嗐€佹崲鏈嶅姟娓呭瘑閽ャ€佹棤鏁堟湰鍦板湴鍧€鎷掔粷涓旀枃浠跺瓧鑺備笉鍙樸€佸垏椤典笉鎻愪氦鏈繚瀛樺瘑閽ャ€侀噸鍚繚鐣欓厤缃€傛埅鍥惧彧鎴埌璇煶椤甸《閮紝STT 缁撹浠ュ疄闄呰〃鍗?IPC/鏂囦欢妫€鏌ヤ负鎹紝涓嶆妸鎴浘褰撲笅鏂硅〃鍗曡瑙夐獙鏀躲€?
+- 涓ゆ鏈€缁堣繘绋嬪潎姝ｅ父閫€鍑猴紝cleanup.forced=false銆乪ndpointRemoved=true锛?300/9301 娓呯悊銆傛棭鏈熺湡瀹為獙鏀跺彂鐜版棤鏁堝湴鍧€琚粯璁ゅ€兼浛浠ｏ紝琛ヤ弗鏍间繚瀛樻牎楠屽悗鎵嶆湁涓婅堪鏈€缁堥€氳繃锛屾棭鏈熷け璐ヨ褰曚繚鐣欏湪 `operations/stt-save-2026-10-24/`銆傛湭浣跨敤鐪熷疄瀵嗛挜/褰曢煶/澶栭儴璇嗗埆璇锋眰锛屼笉瀹ｇО鍚劅鎴栬浆鍐欓獙鏀躲€?
+
+姝ｅ紡 AppData/DS 妯″瀷銆乻table 鐧昏銆佹棩甯?0.1.1 涓庡洓浠藉師鑴忔枃妗ｄ笉鍙樸€備笅涓€杞厛鏍稿璁剧疆鍏釜鍒嗗尯鐨勯敭鐩樻搷浣滀笌缂╂斁甯冨眬锛岄€夊疄闄呯己闄蜂慨澶嶏紱鏈嶅姟/宸ュ潑鍏抽棴纭銆佸畬鏁存柊 Live2D 鎺у埗鍜屽€欓€夊師鐢熷惎鍔ㄧ户缁繚鐣欎负鏈畬鎴愪簨椤癸紝涓嶆墿鎴愪竴娆″ぇ閲嶆瀯銆?
+
+### 宸插畬鎴愶細璁剧疆灏忕獥鍙ｄ笌閿洏鎿嶄綔
+
+鍩虹嚎 main `1beefeb`銆傜湡瀹炴簮鐮?Electron 闅旂 profile `settings-accessibility-20261024` 宸插鐜帮細涓婚棰勮涓轰笉鍙仛鐒?DIV锛涙闈㈠垎鍖轰笁涓紑鍏虫病鏈夊彲璇诲悕绉帮紱680脳500 绐楀彛鍦ㄦ覆鏌撶缉鏀?150% 涓嬫湁鏁堝唴瀹圭害 445脳309锛屽鑸簳閮ㄨ秴鍑虹獥鍙ｏ紝椤堕儴鎸夐挳鏂囧瓧琚尋鎴愮珫鎺掋€傝瘉鎹?`operations/settings-accessibility-2026-10-24/before.{json,png}`锛岃繘绋嬫甯搁€€鍑猴紱娓叉煋缂╂斁鏄帇鍔涙祴璇曪紝涓嶅啋绉?Windows 绯荤粺 DPI 楠屾敹銆?
+
+鏈疆鍙慨璁剧疆澶栧３鍜岀幇鏈夊叕鍏辨帶浠讹細涓婚鏀瑰師鐢熸寜閽紝琛ュ紑鍏冲悕绉?鏍囩鍏宠仈鍜岄€夋嫨鐘舵€侊紝浣跨敤鍘熺敓鎸夐挳閿洏琛屼负涓庡彲瑙佺劍鐐癸紱绐勭獥鍙ｅ厑璁告搷浣滄爮鎹㈣銆佸鑸彉绱у噾缃戞牸銆佸唴瀹圭嫭绔嬫粴鍔紝涓嶆敼 Bento 鑹叉澘銆佷繚瀛樿鍒?鍗忚鎴栨暟鎹簮銆傛棤鏁?domain 鍙傛暟鍥炲埌宸叉湁榛樿璇煶鍒嗗尯锛岄伩鍏嶇┖鐧姐€傛櫘閫氬ぇ灏忎繚鐣欎晶鏍忥紱涓嶆妸鏈疆绠楁棫宸ュ潑鎵€鏈夊瓙鎺т欢鏃犻殰纰嶈璇併€傞獙瀹為檯閿洏 Space/Enter/Tab銆佹湁鏁?鏃犳晥鍒嗗尯銆佸叚椤靛湪甯歌/鏈€灏忕獥鍙ｄ笌 125/150% 娓叉煋缂╂斁鐨勫鑸拰淇濆瓨鍙揪鎬с€佸叧闂脊绐楃劍鐐瑰洖褰掞紱淇濈暀鍘熷疄渚嬩笌姝ｅ紡鏁版嵁銆?
+
+鏈€缁堢粨鏋滀笌杈圭晫锛?
+
+- 鏀瑰姩涓?`SettingsWindowApp.vue`銆乣SettingsNavigation.vue`銆乣SettingsToggle.vue`銆備富棰?DIV 鏀瑰師鐢?button锛屽幓鎺?switch 鎵嬪啓 Space 鎷︽埅锛屽叕鍏卞紑鍏虫湁鍚嶇О/label锛岄鑹蹭笌 Orb 閫夋嫨鏈?aria-pressed锛屽叕鍏辨帶浠惰仛鐒︽湁 outline銆傜獎浜?620 CSS px 鏃跺鑸彉涓夊垪鍙岃锛岀幆澧冧粛鏄剧ず鍦ㄩ《閮紱620鈥?00 鏀剁獎渚ф爮锛岀煯绐楀彛渚ф爮鑷韩鍙粴鍔ㄣ€傛搷浣滄爮鎹㈣涓旀寜閽笉鍘嬬缉绔栨帓锛涘唴瀹规渶灏忓昂瀵歌В闄ゃ€傚垏鍒嗗尯閲嶇疆姝ｆ枃婊氬姩浣嶇疆锛屼笉鏀瑰彉鐒︾偣/鑽夌銆?
+- 鏂板 1 椤瑰疄闄?SFC 鏃犳晥 domain 鍥為€€涓斾笉鍐欓厤缃殑鍥炲綊锛屽師鏈夋晥 appearance 鍒濆鍖栫敱鏃㈡湁娴嬭瘯瑕嗙洊銆傞粯璁ゅ簲鐢?**712锛?07 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛宯ode/web 绫诲瀷妫€鏌ヤ笌鏈€缁堟瀯寤洪€氳繃銆傛棩蹇?`operations/settings-accessibility-{scoped,tests,typecheck,build}.log`锛涙渶缁堟敼鍔ㄦ湭娑夊強 main/preload/鎻掍欢/鍏变韩濂戠害锛屾湭鏃犳剰涔夐噸澶嶆彃浠舵祴璇曘€?
+- 鐪熷疄楠屾敹鏈€缁?`results.json` 鍏?7 椤癸紝鍖呮嫭鍏垎鍖?脳 (880脳640/100%銆?024脳640/125%銆?024脳640/150%銆?80脳500/100%銆?80脳500/125%銆?80脳500/150%) 鍏?36 涓満鏅€傛鏌ユ鏂囨棤妯悜婧㈠嚭銆佸鑸拰淇濆瓨鎸夐挳鍦ㄨ鍙ｅ唴锛汦nter 鍒囦富棰樸€乀ab 鍒板甫鍚嶇О棰滆壊鎸夐挳涓?outline 鍙銆丼pace 鍗曟鍒囧紑鍏炽€丒nter 淇濆瓨銆佹渶绐勭獥鍙ｅ叧闂脊绐楃劍鐐瑰惊鐜?Esc銆佽法鍒嗗尯婊氬姩褰掗浂銆傚凡鏌ョ湅鏅€氭祬鑹蹭笌绱у噾娣辨祬鎴浘銆傚彧鏄?renderer zoom锛岄潪绯荤粺 DPI銆佽灞忓櫒鎴栨瘡涓棫宸ュ潑瀛愭帶浠惰璇併€?
+- 椤甸潰鏌ヨ鍙傛暟鏈夌幇鎴愬畨鍏ㄧ害鏉燂細`isSettingsPage` 浠呭拷鐣?hash銆佷笉蹇界暐 query锛屾湭閰嶇疆 query 鐨勯〉闈㈣鎷掔粷銆傚垵濮嬬湡瀹炶剼鏈皾璇曞甫 query 楠岀粍浠跺洖閫€锛岃姝ｇ‘鎷掔粷锛?*娌℃湁涓烘祴璇曟斁瀹戒富杩涚▼閴存潈**銆傛渶缁堢湡瀹炴鏌ラ獙璇佹嫆缁濅笌鎭㈠鍘熼厤缃?URL锛岀粍浠堕潪娉曞垎鍖哄洖閫€鐢?SFC 鍥炲綊璇佹槑锛屼笉瀹ｇО鏀寔鍙敤鐨?query 鐩磋揪閾炬帴銆?
+- 鏃╂湡鑴氭湰杩橀亣鍒板悗鍙扮獥鍙ｉ敭鐩樻湭鑱氱劍銆佺缉鏀句笅 outline 鍍忕礌鍙栨暣锛屼互鍙婅鐢?`settings` 鑰岄潪 `publicSettings` 鐨勬祴璇?API锛涗慨姝ｆ祴璇曞悗鏈€缁?`final2` 鍏ㄩ儴閫氳繃銆傚悇杩囩▼/澶辫触鏃ュ織淇濈暀锛屼笉绠楅€氳繃銆俙process-final2.json` 瀵瑰簲鏈疆楠岃瘉杩涚▼锛屾甯搁€€鍑猴紝cleanup-final2.forced=false銆乪ndpointRemoved=true锛?302/9303 娓呯悊銆傛湭鎸夋棫 PID 鎿嶄綔鍘熷紑鍙戝疄渚嬨€?
+
+鍥涗唤鍘熻剰鏂囨。 hash 涓嶅彉锛屾寮忔暟鎹?妯″瀷銆乻table銆佹棩甯?exe/ZIP 涓嶅彉銆備笅涓€杞浆鍥炰富鏂规鐨?Live2D 鎺у埗锛氬厛璇诲凡瀹炵幇 headX 鐭椂璇曢獙涓?SDK 鍐欏叆闃舵锛屽啀闄愬畾涓€涓彲楠屾敹鎵╁睍锛屼笉鎶婄幇鏈夊崟閫氶亾璇曢獙褰撳畬鏁存柊寮曟搸銆?
+
+### 宸插畬鎴愶細Live2D 瀹為檯甯ч樁娈典笌缁樺埗鍓嶅€?
+
+鍩虹嚎 main `0d780e5`銆傚凡璇诲疄闄呭畨瑁呯殑 pixi-live2d-display 0.4.0 `dist/cubism4.es.js` update锛歮otion 鈫?saveParameters 鈫?expression 鈫?鏉′欢 blink 鈫?focus 鈫?natural 鈫?physics 鈫?pose 鈫?beforeModelUpdate 鈫?Core.update 鈫?loadParameters銆俇ta 鍦?natural 鍖呰涓啓鍙傛暟鏍?mixer/鍙ｅ瀷锛屽湪 beforeModelUpdate 鍐嶅啓鐩存帴瑕嗙洊鍙傛暟/鍙ｅ瀷/閮ㄤ欢銆傚綋鍓?`ModelPerformanceView.sample.applied` 鍙槸 mixer 鐗╃悊鍓嶅啓鍏ワ紝鍗村湪 UI 鏍団€滄渶缁堚€濓紝闇€瑕佹敼鎴愬噯纭垎娈点€?
+
+鏈疆鍙姞棰勮鏈熼棿銆佸崟妯″瀷銆佸彧璇荤殑 headX 瀹為檯闃舵閲囨牱锛涙寜鐪熷疄琚皟鐢ㄧ殑鏂规硶璁板綍锛岀己澶?琚烦杩囬樁娈典笉浼€犮€備繚鐣欐渶杩戜竴甯у拰璁℃暟/闃舵闆嗗悎锛岄檺鍒舵瘡甯ф潯鏁帮紝鏈瑙堜笉閫愬抚璇诲彇鍙傛暟銆佷笉鍐欐枃浠躲€傚睍绀虹墿鐞嗗墠涓?Core.update 鍓嶇殑鐪熷疄鍊硷紱鍋滄淇濈暀涓婃璇婃柇浣嗛噴鏀炬墍鏈夋帶鍒讹紝鎹㈡ā鍨嬫竻璇婃柇銆傚疄渚嬫柟娉曞寘瑁呬繚鐣?this/鍙傛暟/杩斿洖鍊?鍘熷紓甯革紝涓嶆敼 SDK 椤哄簭銆佷笉琛ヤ笉瀛樺湪闃舵銆傚喕缁?mixer 鍜屽叕寮€璁剧疆濂戠害涓嶅彉锛屽唴閮ㄥ彧璇昏鍥炬墿灞曪紱涓嶅绉版柊榛樿寮曟搸鎴栨墍鏈夐€氶亾宸叉帴鍏ャ€?
+
+楠屾敹锛氭棤棰勮闆惰鍙栥€侀樁娈甸『搴?鐗╃悊鍚庡€?鏈夌晫鍐呭瓨銆佺己澶遍樁娈?鏂规硶杩斿洖涓庡紓甯?鍋滄閲嶅惎/鎹㈡ā鍨嬶紱鐪熷疄鍙楁帶 DS 涓?Hiyori 鐨勬棫/鏂板洓绉掗瑙堛€侀樁娈靛€间笌 Core 缁樺埗鍓嶅€笺€佸仠姝㈠拰鏂伴瑙堬紝纭鍙楁帶妯″瀷 hash 涓嶅彉鍜屼复鏃跺疄渚嬫竻鐞嗐€傝瘉鎹嫭绔嬩繚瀛橈紝涓嶉噸澶嶅師鐢?exe 鍚姩鐭╅樀銆?
+
+鏈€缁堝疄鐜颁笌瀹炴祴锛?
+
+- `services/performance/sdk-trace.ts` 瀵瑰疄渚嬫柟娉曚竴娆″寘瑁咃紝淇濇寔璋冪敤 this/鍙傛暟/杩斿洖鍊间笌鍘熷紓甯搞€傚疄闄呭灞?update 鐣屽畾瀹屾暣甯э紝鎸夊疄闄呮柟娉曡皟鐢ㄩ噰鏍?motion/save/expression/blink/focus/natural+Uta/physics/pose/Core/load锛涗繚鐣欐渶杩戝畬鏁村抚銆侀樁娈甸泦鍚堝拰璁℃暟锛屾瘡甯т笂闄?16 椤广€傚仠姝㈠悗 wrapper 浠嶄紶閫掕皟鐢ㄤ絾涓嶈 Core/涓嶅垱寤烘牱鏈紱妯″瀷闅?WeakMap 鍥炴敹锛屼笉寤烘枃浠舵棩蹇楁垨鏃犵晫鍘嗗彶銆傝瘖鏂鍙栧け璐ヤ笉鎵撴柇鍘熺敓甯э紝涓嶄吉閫犵己澶遍樁娈点€?
+- `model-runtime.ts` 鍦ㄧ煭鏃堕瑙堝惎鍔?鍋滄/prepare 鎺ョ嚎锛宍ModelPerformanceView` 浠呮墿鍐呴儴鍙 trace 涓?sample.rendered锛涘叕寮€鍋忓ソ銆乫irst-wave/mixer 鍐荤粨濂戠害鍜屽澶?SDK 涓嶅彉銆俠efore-core-update 璇诲彇褰撳抚瀹為檯 headX锛屼笉鎶婄墿鐞嗗墠 applied 褰撴渶缁堝€硷紱鍋滄 sample 浠嶆竻绌猴紝trace 鐣欎笂娆′緵鏌ワ紝prepare 娓呮棫妯″瀷 trace銆傛妧鏈鎯呮爣鏄庡綋鍓?涓婃瀵圭収锛屼笉鎶婂巻鍙茶瘖鏂綋浠嶅湪鎺у埗銆?
+- 榛樿鐧昏鐨?model-performance.test.cjs 鏂板 3 椤癸細妯℃嫙鐗╃悊鏀瑰啓鍚?rendered=17 鑰?applied<9銆佸疄闄呰皟鐢ㄩ『搴?鏉′欢璺宠繃锛? 涓囧抚浠嶅彧淇濈暀涓€甯э紝鍋滄鍚庨浂璇诲彇/蹇収闅旂/鏂伴瑙堥噸缃?prepare 娓呯┖锛涚己澶辨柟娉曘€乼his/鍙傛暟/杩斿洖鍊笺€佸師濮嬪紓甯稿拰璇婃柇璇诲紓甯镐笉鏀瑰彉 SDK 琛屼负銆傛渶缁堝簲鐢?**715 椤癸紙710 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**104/104**銆佺被鍨嬨€佹瀯寤哄拰涓夊绾﹂€氳繃锛屾棩蹇?`operations/model-trace-{scoped,app-tests,plugin-tests,typecheck,build,contracts}.log`銆傛渶鍚庝粎鎶娾€滄渶杩戞鍦ㄨ繘琛岀殑鈥濇敼鎴愨€滃綋鍓嶁€濈殑鏂囨淇涓嶉噸澶嶆暣濂楁祴璇曘€?
+- 鐪熷疄楠屾敹 `D:/Frankenstein/Uta-Workspace/operations/model-trace-2026-10-24/`锛宲rofile `model-trace-20261024`銆備粠鍐荤粨 DS 鍩哄簳鏍￠獙鍚庡鍒?59 浠藉０鏄?runtime/鎺堟潈鏂囦欢鍒拌嚜鏈?profile锛屾湭鐢ㄦ寮?AppData銆侶iyori/DS 鍚勮窇鏃?鏂板洓绉掑鐓э紝瀹為檯鎸夐挳銆佺嫭绔?Core.update 鍓嶈鏁般€乁I 闃舵鍒楄〃涓庡浘鍍忓潎鏍稿锛涘叡 8 椤归€氳繃锛屽洓缁勬崟鑾锋瘡缁勭害 39鈥?0 甯с€傝嚜鍔?鎵嬪姩鍋滄閲婃斁 preview/缂栬緫閿侊紝鍋滄鍚庤鏁颁笌甯т笉鍐嶅彉锛屾崲妯″瀷鏃?trace 涓?null锛?9 浠芥枃浠?hash 鍏ㄤ笉鍙樸€?
+- Hiyori 璇ユ鏈?physics/pose锛屼絾娌℃湁鎵ц expression/blink锛汥S 鏈?expression/blink/physics锛屾病鏈?pose锛岄潰鏉垮噯纭弽鏄犮€侱S mixer 鏍锋湰 native=1.2624545銆乤pplied=2.5412578銆乺endered=2.5412579锛孒iyori 瀵瑰簲 4.9636979/6.2406817/6.2406816锛屽彧鏄甯ф诞鐐圭簿搴﹀樊寮傦紱涓嶈兘鎺ㄨ鐪煎槾/body 涓嶅彈鐗╃悊褰卞搷銆傜湡姝ｇ墿鐞嗚鍐欏樊寮備粎鐢变笂杩板す鍏疯瘉鏄庯紝涓嶇紪閫犵湡瀹炲樊寮傘€?
+- 鏈疆鏃犲け璐ラ噸璺戯紝楠岃瘉杩涚▼姝ｅ父閫€鍑猴紝cleanup-a.forced=false銆乪ndpointRemoved=true锛?304/9305 娓呯悊銆傚凡鏌ョ湅 DS 瀵圭収鎴浘锛涗粛闈?60鈥?0 绉掑悓鑴氭湰褰曞儚銆佹€ц兘棰勭畻銆佺湡瀹炶闊虫垨 ZIP 楠屾敹銆傛寮忔ā鍨?鏁版嵁/鏃ュ父/stable 鏈啓锛屽洓浠藉師鑴忔枃妗?hash 淇濇寔銆?
+
+鎺ヤ笅鏉ワ細鎸夊凡瀹炴祴闃舵閫夋嫨涓€涓溂鐫涙垨鍢撮儴鐭椂鎺у埗鐩爣锛屾槑纭棫鍐欏叆閫€鍑恒€丼DK blink/motion 涓?post-physics 鐨勮竟鐣屽悗鍐嶅疄鏂斤紱涓嶈鐩存帴鎶?mixer 鐨勫叏 neutral 杈撳嚭閫愬抚鐏屽叆 Core锛屼笉寮€鏀?DS body 鐗╃悊杈撳嚭锛屼笉鎶婂綋鍓?headX 婕旂ず鏍囨垚鏂伴粯璁ゅ紩鎿庛€?
+
+### 宸插畬鎴愶細鍙岀溂闂悎涓庡師鐢熺湪鐪肩殑鐭椂浠茶
+
+鍩虹嚎 main `40becdb`銆傚湪鈥滄ā鍨嬭〃鐜扳€濇柊澧炴槑纭偣鍑荤殑鍥涚鍙岀溂闂悎棰勮锛屼笉鎸佷箙鍖?涓嶆敼榛樿寮曟搸銆傚彧鏈夊弻鐪兼爣鍑嗘槧灏勫潎宸茬‘璁ゃ€乤vailable銆侀潪鐗╃悊杈撳嚭銆佽寖鍥存湁鏁堟墠寮€鏀俱€傛帴绠℃椂浠呰烦杩囪繖涓ゅ弬鏁扮殑 Uta 鏃ф爤鍐欏叆锛汼DK motion/expression/blink 浠嶆墽琛屻€俠eforeModelUpdate 鏃㈡湁鏃ф爤/鍙ｅ瀷/閮ㄤ欢涔嬪悗锛岀敤褰撳抚鐗╃悊/pose 鍚庣殑鐪熷疄鍙岀溂鍊间綔涓?base锛屼互 post-physics multiply 闄嶄綆寮€鍚堬紝淇濇寔闂悎鍚庡钩婊戦€€鍒板洜瀛?1锛屽啀閲婃斁锛涗笉鍐欏叾浠?mixer neutral 閫氶亾锛屼笉鏀?savedParameters锛屼笉寮鸿鐫佸紑鍘熺敓宸查棴鐪笺€?
+
+寮€鍚堟寜 [min,max] 褰掍竴鍖栧悗涔樺洜瀛愩€佹槧鍥炲悓涓€鑼冨洿锛涘洜瀛?1 淇濈暀鍘熺敓鍊硷紙鍖呮嫭楂樹簬榛樿鐨勭潄澶э級锛屼笉鍊?signed/default-anchor 澶撮儴鏄犲皠濂楃溂鐫涖€傛椂闂翠负鍏抽棴绾?400ms銆佷繚鎸佸埌 2400ms銆?200ms 鎭㈠銆佷綑涓嬫椂闂撮殢鍘熺敓锛屽啀鍦?4000ms 閲婃斁锛涘噺灏戝姩鐢诲亸濂戒笉鎾斁銆傚唴閮ㄨ缃懡浠ょ櫧鍚嶅崟鍔犱竴涓?preview-eyes锛屾部鐢ㄦā鍨?浼氳瘽浠ｆ銆佸伐鍧婁簰鏂ュ拰閲婃斁锛屼笉寮€鏀惧涓诲閮ㄥ崗璁€傞樁娈佃瘖鏂墿鏄庣‘鍙傛暟 ID锛岀溂鐫涢瑙堝彧璁板綍宸︾溂闃舵锛屽彟鏄剧ず鍙岀溂鐗╃悊鍚庡啓鍏ワ紝閬垮厤鍐掔О headX銆?
+
+楠屾敹锛氬す鍏峰己鍒?blink/physics 鍐嶆鐫佺溂鍚庝粛淇濇寔闂悎锛涘師鐢熷凡闂溂涓嶈鎵撳紑銆侀潪瀵圭О鑼冨洿/鐫佸ぇ淇濈暀銆佸彧鍐欏弻鐪?鏃х溂鏍堥€€鍑恒€佸仠姝㈠悗鏃ф帶鍒舵仮澶嶃€佺己澶?鐗╃悊杈撳嚭涓嶅紑鏀俱€佹參甯ц秴鏃堕噴鏀俱€傜湡瀹炲彈鎺?DS/Hiyori 鐐规寜閽紝鍦ㄤ繚鎸?鎭㈠/鍋滄/绂婚〉妫€鏌ヤ袱涓溂鐫涚殑 Core 鏇存柊杈圭晫涓庣敾闈紱妯″瀷鏂囦欢 hash 涓嶅彉锛屾寮忔暟鎹笉鍐欍€?
+
+鏈€缁堝疄鐜颁笌缁撴灉锛?
+
+- `model-runtime.ts` 鍒嗗嚭 head/eyes 鐭椂 owner锛沗startEyePerformance` 鍒涘缓鐙珛鍙攢姣?mixer/4 绉掕鏃跺櫒銆傛槧灏勫彧鎺ュ彈鏍囧噯 ID銆乤vailable/confirmed/闈炵墿鐞嗚緭鍑?鏈夋晥寮€鍚堣寖鍥达紱缂轰竴鍙溂鍧囨嫆缁濄€俙performanceOwnsParameter` 鍙鍙岀溂閫€鍑烘棫 Uta 鏍堛€俙applyEyePerformance` 浠呭湪 loader `beforeModelUpdate` 鐨勬棫閮ㄤ欢/鍙ｅ瀷鏀跺熬鍚庢墽琛岋紝璇荤湡瀹?post-physics 鍙岀溂浣滀负 base锛屼互 factor=1鈫?鈫? 鐨?post-physics multiply 鏄犲洖鍘熻寖鍥淬€傚彧鍐欎袱涓?eye 鍙傛暟锛屽仠姝㈠悗涓嬩竴甯х敱鍘?motion/blink/鏃ф爤鎭㈠锛屼笉淇敼鍘?savedParameters 鎴栫墿鐞嗘柟娉曘€?
+- 璁剧疆鍐呴儴鐧藉悕鍗曞姞 `preview-eyes`锛堟棤鍙傛暟杞借嵎锛夛紱pet bridge 娌跨敤宸叉湁妯″瀷涓婁笅鏂囧拰浼氳瘽缁戝畾锛宔xecutor 鐢ㄥ伐鍧婇攣浜掓枼骞惰蛋鐩稿悓閲婃斁銆傛病鏈夋敼鍙樺閮?MCP/瀹夸富 SDK銆傞潰鏉挎柊澧炩€滈棴鐪煎苟鎭㈠鈥濓紝鍋滄涓庢潵婧愭槸涓ょ娴嬭瘯鍏敤锛涘噺灏戝姩鐢讳笉鎾斁銆佸垏鍩?鎶樺彔/鍗歌浇娌跨敤閲婃斁銆傚彧璇?trace 澧?parameterId锛岄棴鐪艰瘖鏂褰曞乏鐪肩湡瀹為樁娈碉紝鍙岀溂鍙︽樉绀虹墿鐞嗗悗鍘熺敓/绾︽潫鍊硷紝涓嶅啀娣风敤澶撮儴鏍囩銆?
+- 6 椤规柊澧炴祴璇曪細浜旈」瀹為檯 runtime/loader/executor 琛屼负锛堝鐪?鍘熺敓闂溂/鍙啓鐪肩潧/鍘?saved 涓嶅彉锛涚墿鐞?鐪ㄧ溂閲嶅紑鍚庝繚鎸?鏃х溂鏍堥€€鍑轰笌閲婃斁鎭㈠锛涚己鐪?鐗╃悊杈撳嚭/闂悎榛樿鎷掔粷锛涘ぇ闂撮殧/鍧忓€奸噴鏀炬棤杩熷埌閲嶅惎锛涘伐鍧婁簰鏂?缁撴潫浼氳瘽鎷掔粷锛夛紝涓€椤规棤鍙傛暟鍛戒护涓嶅彲澶瑰甫浠绘剰鍙傛暟鍐欏叆銆傛渶缁堝簲鐢?**721锛?16 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**104/104**锛宯ode/web 绫诲瀷銆佹渶缁堟瀯寤恒€佷笁濂戠害閫氳繃銆傛棩蹇?`operations/eye-performance-{scoped,app-tests,plugin-tests,typecheck,build,contracts}.log`銆?
+- 鐪熷疄 `D:/Frankenstein/Uta-Workspace/operations/eye-performance-2026-10-24/`锛岀嫭绔?profile `eye-performance-20261024`锛屼粠鍐荤粨 DS 鍩哄簳鏍￠獙澶嶅埗 59 鏂囦欢锛汬iyori 涓?DS 鍧囦粠瀹為檯鎸夐挳寮€濮嬶紝淇濇寔娈靛叚缁?IPC 鏍锋湰涓?Core 鏇存柊鍓嶈繛缁?20 甯у弻鐪?0锛屽師鐢熷熀鍑嗙害 1锛? 绉掑悗鐪熷疄 Core 鍙岀溂鎭㈠绾?1銆傚苟楠岃瘉鎵嬪姩鍋滄銆佸垏璇煶鍩熴€佸噺灏戝姩鐢汇€佸師鐢熷叧璁剧疆绐楀彛閲婃斁閿?preview锛屽叡 7 椤归€氳繃銆傛埅鍥?before/closed/restored 宸插疄闄呮煡鐪嬶紝DS 纭湁闂溂涓庢仮澶嶇敾闈紱涓嶆槸闊抽鎴栨暣娈靛姩浣滆鎰熻璇併€?
+- 鏈疆鐪熷疄鑴氭湰涓€娆￠€氳繃锛岃繘绋嬫甯搁€€鍑猴紝cleanup-a.forced=false銆乪ndpointRemoved=true锛?306/9307 娓呯悊銆?9 浠藉彈鎺ф枃浠?hash 涓嶅彉銆傛渶缁堜粎鎶婁袱娴嬭瘯鍏辩敤鍋滄鎸夐挳绉诲埌涓ょ粍娴嬭瘯涓嬫柟骞堕噸鏂版瀯寤猴紝鏈负绾竷灞€绉诲姩閲嶅鏁存鍔ㄤ綔娴嬭瘯锛涘悗缁嫢澶嶆祴鐢ㄤ繚鐣?verify.mjs銆傚洓浠藉師鑴忔枃妗?hash 淇濇寔锛屾寮忔暟鎹?DS/stable/鏃ュ父 exe/ZIP 鏈敼銆?
+
+涓嬩竴杞叆鍙ｏ細鍏堣拷 loader 鐨?lipSyncActive/lipSyncValue 涓?mouth-motion/reply-speech 鐢熷懡鍛ㄦ湡锛屾槑纭煶棰戝紑鍚堛€佹棤闊抽琛ㄦ儏寮€鍙ｅ拰鍢村舰鐨?ownership锛屽啀鍐荤粨涓€涓煭鏃剁洰鏍囥€傜姝㈡妸瀹為檯璇磋瘽鏃剁殑鍘熺敓寮€鍚堝綋 neutral 瑕嗙洊銆佺姝㈡妸 DS mouthForm [-2,1]/default -0.5 褰撳绉板€笺€傚畬鏁存寔缁?owner銆佽〃杈句簨浠舵帴绾垮拰鍊欓€夊師鐢熷惎鍔ㄩ棶棰樹粛鏈В鍐筹紱涓嶅甯?0.3 鎴?1.0 瀹屾垚銆?
+
+鏈€鏂版敹灏撅細涓婅堪鍙岀溂鎺у埗宸叉彁浜?`fa583d8`锛屽悓娆＄户缁墽琛岃繕鎻愪氦浜?STT `1beefeb`銆佽缃彲鎿嶄綔鎬?`0d780e5`銆佸疄闄呭抚璇婃柇 `40becdb`銆俶ain 褰撳墠鍙綑鎺ョ鍓嶅洓浠藉彈淇濇姢鏂囨。鏈彁浜わ紝hash 涓?inventory 鐩稿悓锛涙湰娆¤嚜寤洪獙璇佸疄渚嬪叏閮ㄩ€€鍑猴紝9300鈥?307 鏃犵洃鍚紝鍘熷紑鍙戝疄渚嬫湭鍋滄銆侰URRENT 椤堕儴鐜版湁绠€鐭渶鏂扮姸鎬?浣撻獙鍏ュ彛锛岄伩鍏嶄粠鏃ф壒娆″巻鍙茬寽杩涘害銆傚悗缁粛 Codex 鍗曠嫭涓茶瀹炴柦锛屼笉鎭㈠娲惧崟锛涙渶缁堟棩甯?exe 鏇挎崲闇€瑕佺湡瀹炶В鍘嬪惎鍔ㄩ獙鏀躲€?
+
+### 宸插畬鎴愶細鍢村舰涓庢棤璇煶寮€鍙ｅ垎寮€锛岃闊充紭鍏?
+
+鍩虹嚎 main `bb41104`锛岀粺涓€涓荤洰褰曚覆琛屽疄鏂斤紝淇濈暀鍥涗唤鍘熻剰鏂囨。銆傚凡杩?`useStageRenderLoop` 鈫?`setModelLipSync` 鈫?natural/beforeModelUpdate锛歍TS 瀹為檯鎾斁浼樺厛锛屽彟鏈夋祦寮忔枃瀛楁椂閽熷洖閫€锛涢潤闊虫 active=true 浠嶅崰鍙ｅ瀷锛屾敹鍙ｅ熬鍊?>0.001 涔熶粛鎺ョ锛屽仠姝㈡墠鎭㈠褰撳墠鏃у弬鏁版爤銆俙reply-speech` 鍙礋璐ｆ枃鏈垽閲?缂撳啿锛屼笉鑳界敤瀹冨垽鏂煶棰戝綋鍓嶅崰鐢ㄣ€?
+
+鏈疆鏂板鍥涚鏄庣‘鐐瑰嚮鐨勨€滃井绗戝苟寮犲槾鈥濇祴璇曘€傚槾褰㈠彧鎺ュ彈宸茬‘璁?闈炵墿鐞嗚緭鍑虹殑鏍囧噯鏈夌鍙锋槧灏勶紝鎸夌湡瀹?default 閿氬垎娈垫崲绠楋紝淇濈暀 DS [-2,1]/default -0.5锛涘紑鍚堝彧鎺ュ彈瀹夊叏鐨勫崟鍚?min=default<max 鏄犲皠銆俻ost-physics 璇诲彇鐪熷疄鍘熺敓鍊硷紝400ms 杩涘叆銆佷繚鎸佸埌 2400ms銆?200ms 鍥為€€銆?000ms 閲婃斁锛屽鐢ㄥ凡鏈夊弻鐪兼祴璇曡妭濂忋€傚彧鍐欏疄闄呮帴绠＄殑 mouthForm/mouthOpen锛屼笉鍐欏叾浠?neutral锛屼笉鏀规ā鍨?savedParameters/鎸佷箙璁剧疆銆?
+
+璇煶鐘舵€佷粠鐜版湁 setModelLipSync 鐨勭湡瀹?active/灏惧€煎悓姝ュ埌褰撳墠妯″瀷 runtime锛屼笉鏀瑰悎鎴?鎾斁瀹炵幇銆傛棤璇煶鏃舵帴绠″紑鍚堬紱璇煶/娴佸紡鍙ｅ瀷鍙婃敹鍙ｅ熬娈靛崰鐢ㄦ椂绔嬪嵆璁╁嚭寮€鍚堬紝鍙繚鐣欏槾褰紝鍙ヤ腑闈欓煶涓嶈兘琚〃鎯呭紶鍢磋鐩栥€傚紑濮嬫祴璇曟椂宸茬粡璇磋瘽鍚屾牱鍙敼鍢村舰锛屾棫璇煶缁撴潫鍚庝粎鍦ㄩ瑙堜綑涓嬫椂闂村唴鍏佽鎭㈠琛ㄦ儏寮€鍚堛€傚仠姝?绂婚〉/鍑忓皯鍔ㄧ敾/妯″瀷鏇挎崲浠嶉噴鏀撅紱淇濈暀璇煶鍗犵敤锛屼笉鍥犲仠姝㈡祴璇曟妸璇磋瘽鏍囦负缁撴潫銆?
+
+鑼冨洿锛氬唴閮ㄨ缃櫧鍚嶅崟鍔犳棤杞借嵎 preview-mouth锛屾部鐢ㄦā鍨?浼氳瘽缁戝畾涓庡伐鍧婁簰鏂ワ紱闈㈡澘璇存槑璇煶浼樺厛骞舵樉绀哄疄闄呭槾閮ㄩ噰鏍枫€傚喕缁撳叕寮€鍋忓ソ/澶栭儴 SDK/mixer 濂戠害涓嶅彉锛屼笉鍗囩骇榛樿寮曟搸銆傞獙鏀跺惈闈炲绉版槧灏勩€佹棤澹伴煶涔熻兘寮犲槾銆乻peech active=0/灏炬浜ゆ帴銆佸彧鍐欏疄闄呴€氶亾銆佸仠姝㈠悗鍘熸帶鍒舵仮澶嶃€佺己澶?鐗╃悊杈撳嚭/鑼冨洿涓嶇‘瀹氭嫆缁濓紱鐪熷疄 DS/Hiyori Core 鍜岀敾闈€侀殧绂昏闊冲崰鐢ㄩ獙璇併€佹枃浠?hash 涓庨€€鍑烘竻鐞嗐€傝嫢鏈疄娴嬬湡瀹炶闊冲悎鎴?鍚劅灏辨槑纭笉瀹ｇО閫氳繃銆?
+
+鏈€缁堝疄鐜颁笌缁撴灉锛?
+
+- `model-runtime.ts` 澧?mouth 鐭椂 owner锛屾部鐢ㄧ嫭绔?mixer/4 绉掔鏈熴€傚槾褰㈠畨鍏ㄩ棬妲涗繚鎸?min<default<max锛屽紑鍚堜繚鎸?min=default<max銆俻ost-physics replace 浣跨敤褰撳抚鐪熷疄 base锛屽槾褰㈠垎娈垫槧鍥炵湡瀹?raw锛屽彧鏈夋棤璇磋瘽鍗犵敤鎵嶅姞鍏?鍐?mouthOpen锛涘彧鎸夊疄闄?mask 鍐欙紝涓嶆妸鍏朵粬 neutral 杈撳嚭鐏岃繘 Core銆傚叡鐢ㄥ凡鏈夊洓绉?envelope锛屽師鍙岀溂鑺傚涓嶅彉銆俻review 鍋滄娓呰瘖鏂噰鏍蜂絾淇濈暀 speechActive锛涘悓妯″瀷閲嶆柊 prepare 涔熶繚鐣欐棦鏈夎璇濆崰鐢ㄣ€?
+- loader 鐨?`setModelLipSync` 灏?active 鎴?value>0.001 鍚屾杩?runtime锛岀湡瀹炲０闊炽€佸彞涓潤闊冲拰鏀跺彛灏炬閮界淮鎸佸紑鍚堜紭鍏堢骇锛沗beforeModelUpdate` 鍦ㄦ棦鏈夊彛鍨?閮ㄤ欢涔嬪悗搴旂敤 mouth锛岃闊冲崰鐢ㄦ椂鍙啓 form銆傛病鏈夋洿鏀瑰悎鎴?鎾斁鍣?鏂囧瓧鍥為€€瀹炵幇锛屼笉鎶?reply 鍘婚噸鐘舵€佸綋闊抽鐘舵€併€傚唴閮ㄦ棤杞借嵎 `preview-mouth` 娌跨敤缁戝畾涓庝簰鏂ワ紝涓嶆帴鍙楀閮?speechActive 瑕嗙洊锛涗笉鏀瑰澶?MCP/鍏紑鍋忓ソ/mixer 濂戠害銆?
+- 鏂板 8 椤瑰疄闄?runtime/loader/executor/鍛戒护琛屼负娴嬭瘯锛屽惈 DS 闈炲绉板€笺€佹棤澹板紑鍙ｃ€佺湡瀹?lipSync 鎺ョ嚎鐨?active=0/灏炬浜ゆ帴銆侀瑙堢粨鏉熶笉娓呰闊炽€佸悓妯″瀷 prepare銆佹棫鏍堟仮澶嶃€佺墿鐞?缂哄け/杈圭晫鎷掔粷銆侀潪娉曞€?闀块棿闅斻€佹ā鍨?浼氳瘽/宸ュ潑涓庤浇鑽疯繃婊ゃ€傛渶缁堝簲鐢?**729 椤癸紙724 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛屾彃浠?**104/104**锛岀被鍨?鏋勫缓/涓夊绾﹂€氳繃銆傚畬鏁撮€氳繃鍚庡彧杩藉姞浜?Hiyori 涓婄晫榛樿鍊肩殑鍚屼竴鏉℃祴璇曟柇瑷€锛屽啀璺戝彈褰卞搷 52 椤瑰叏閮ㄩ€氳繃锛屾湭閲嶅鏃犲叧鍏ㄥ銆?
+- 鏈鎵ц鏉冮檺浠?unrestricted 鍒囧埌 restricted 鍚庯紝棣栬疆瀹屾暣娴嬭瘯鐨?127.0.0.1 杩炴帴鎶?EACCES锛屾瀯寤?realpath 鎶?EPERM锛涘け璐ュ師鏃ュ織淇濈暀锛屼笉鑳界畻閫氳繃銆傛寜鐢ㄦ埛宸叉巿鏉冭寖鍥撮€氳繃宸ュ叿鍙楁帶鎵ц鏉冮檺閲嶈窇鍚庯紝`operations/mouth-performance-{app-tests,plugin-tests,build}-verified.log` 鎵嶆槸鏈€缁堥€氳繃锛沗typecheck/scoped/contracts` 鏃ュ織鍦ㄥ悓鐩綍鍓嶇紑涓嬨€傛病鏈変慨鏀瑰叏灞€鏉冮檺銆佺郴缁熻缃垨娌欑浠ｇ爜銆?
+- 鐪熷疄璇佹嵁 `D:/Frankenstein/Uta-Workspace/operations/mouth-performance-2026-10-24/`锛宲rofile `mouth-performance-20261024`锛岀鍙?9308/9309銆俙results.json` 10 椤归€氳繃锛欻iyori 瀹為檯 form [-2,1]/default=1 涓嶇鍚堣寖鍥撮棬妲涳紝鎸夐挳绂佺敤锛岀洿鎺ヨ皟鐢ㄨ繑鍥?mouth-unavailable锛屼笖娌℃湁鍙栧緱宸ュ潑閿侊紱DS form [-2,1]/default=-0.5銆乷pen [0,1]/default=0锛岀湡瀹炴寜閽ǔ瀹氳緭鍑?form鈮?.175/open鈮?.45锛岀粨鏉熻嚜鍔ㄩ噴鏀俱€傚凡鏌ョ湅 DS before/smile/restored/闈欓煶娈电敾闈€?
+- PCM 楠屾敹浣跨敤浠呯粦瀹氭湰鏈虹殑涓存椂 HTTP 鏈嶅姟杩斿洖 8 绉掑凡鐭ラ煶棰戯紝owned main 璋冭瘯鍣ㄦ姇閫掍竴鏉″悎鎴愮殑 rp_reply 鍒版湰瀹炰緥 renderer锛涚粡杩囩湡瀹?RuntimeCommandController 鈫?TTS IPC 鈫?Audio 鈫?瑙ｇ爜鍖呯粶 鈫?stage 鈫?setModelLipSync銆傛病鏈夌粡杩囩湡瀹炲涓诲彂鐜?HTTP 鎻℃墜锛屼笉鑳藉綋浣滃閮ㄥ钩鍙伴獙鏀躲€倂olume=0锛岃瘉鏄庣湡瀹炴挱鏀炬椂閽?鎺у埗浜ゆ帴锛屼笉澹扮О鍚埌闊宠壊銆傞潤闊虫 Core open鈮?.0011鈥?.0019锛宻peechActive=true銆佸彧鍐?form锛涢瑙堢粨鏉熻€岄煶棰戞湭缁撴潫鏃?speechActive 浠?true锛岄煶棰戣嚜鐒?ended 鍚庢墠 false銆?
+- 鍒濇鐪熷疄鑴氭湰閿欒鍋囧畾 Hiyori 蹇呭畾婊¤冻瀹夊叏鑼冨洿锛宎 璁板綍澶辫触锛涙煡鐪熷疄鑼冨洿鍚庝慨姝ｉ獙鏀朵负绂佺敤鍥為€€锛?*鐢熶骇闂ㄦ娌℃湁鏀惧**銆傛渶缁?b 鍦烘櫙鍏ㄩ儴閫氳繃锛宑leanup-b.forced=false/endpointRemoved=true锛宎 鍚屾牱姝ｅ父閫€鍑猴紱9308/9309 涓庡亣鏈嶅姟鍧囨竻鐞嗐€?9 浠藉彈鎺?DS 鏂囦欢 hash 鏈彉锛屽洓浠藉師鑴忔枃妗?hash 鏈彉锛涙寮?AppData/妯″瀷/stable/鏃ュ父 exe/ZIP 鏈啓銆?
+
+涓嬩竴杞細妫€鏌?TtsMouthTracker 鍦?audio 鏈夊璞′絾鍖呯粶鏈氨缁€佺紦鍐?鏆傚仠/缁撴潫/鍙栨秷鍙婃ā鍨嬫浛鎹㈡椂鐨勮涓猴紝閽堝瀹為檯缂洪櫡闄愬畾淇锛涗笉鍥犱负鏈疆 PCM 姝ｅ父缁撴潫灏卞绉版墍鏈夊０闊崇敓鍛藉懆鏈熷凡閫氳繃銆侶iyori 鍢村舰杈圭晫闇€鍙︿綔妯″瀷璇箟/鏍″噯鍐崇瓥锛屼笉绉佽嚜鎶婃湰娆℃爣鍑嗘槧灏勯棬妲涙敼鏉俱€傚畬鏁存柊榛樿寮曟搸銆佹寔缁〃杈句簨浠舵帴绾裤€佸悓鑴氭湰褰曞儚鍜屽彲鐢?ZIP 浠嶅緟瀹屾垚銆?
+
+### 宸插畬鎴愶細闊抽鍙ｅ瀷鐨勬殏鍋?缂撳啿涓庢椂闂村熀鍑?
+
+璧风偣 main `26bd569`锛堜笂杞槾閮ㄦ帶鍒讹級銆傚凡瀹氫綅 `TtsMouthTracker.level` 鍙湁 envelope 宸插瓨鍦ㄦ椂鎵嶇湅 audio.paused锛沘udio 瀛樺湪浣嗗寘缁滄湭灏辩华鏃讹紝鐩存帴鐢ㄥ閽熸帹杩涙枃鏈紝鏆傚仠/缂撳啿/璺宠浆涓庨煶棰戠粨鏉熶篃鍙兘寮犲槾銆傛澶?speakHttp 姣忔 onplaying 閮介噸鏂?start/瑙ｇ爜锛屽悓涓€涓煶棰戜粠绛夊緟鎭㈠鏃朵細閲嶇疆宸茶幏寰楃殑鍖呯粶銆?
+
+鏈疆鍙慨 mouth tracker 鍜?HTTP 鎾斁鐨勯噸澶?playing 鎺ョ嚎锛歛udio 瀵硅薄瀛樺湪鏃讹紝paused/ended/seeking/readyState<3 杩斿洖闆讹紱鏃?envelope 鐨勬枃瀛楀洖閫€涔熶娇鐢?currentTime锛屼笉浠ュ閽熸帹杩涳紝涓旀槑纭粛鏄枃瀛楀洖閫€鑰岄潪瀹炴祴鎸箙銆傛棤 audio 鐨勬棦鏈夋枃瀛楁椂閽熶繚鎸併€傞潪娉曟椂闂?鐢靛钩涓嶄紶 NaN锛屾椂闂撮浂鏄悎娉曡捣鐐广€備竴涓?audio 鍙垵濮嬪寲涓€娆″彛鍨?瑙ｇ爜锛屾仮澶嶆挱鏀句笉閲嶆柊寮€濮嬫枃瀛楀拰娓呯┖鍖呯粶锛涘彇娑?鎹?audio 鐨勬棫缁撴灉浠嶆嫆缁濄€備笉娣峰叆鎾斁瓒呮椂/鏈嶅姟閰嶇疆閲嶆瀯鎴栨浛鎹㈤粯璁ゅ彛鍨嬬瓥鐣ャ€?
+
+楠屾敹锛氬厛鐢ㄥ疄闄?tracker 澶嶇幇鏆傚仠浣嗗寘缁滄湭灏辩华鐨勯敊璇紱鍐嶉獙鏈?鏃?envelope 鐨勬殏鍋?缁撴潫/瀵讳綅/缂撳啿銆佹仮澶嶆椂娌块煶棰戞椂闂淬€侀潪娉曡鏁板拰娓呴櫎鍚庤繜鍒?envelope锛涘疄闄?TTS 鎺у埗鍣ㄨ繛缁?playing 涓嶉噸缃?tracker銆傜湡瀹炵嫭绔?profile 楠屾殏鍋滃鑷村師鎺у埗鍣ㄧ粨鏉熴€佸彈鎺?buffering/seeking 鐘舵€侀棴鍚?鎭㈠銆佸彇娑堝悗涓嶈繜鍒伴噸寮€銆傝嫢鐢ㄥ睘鎬ф敞鍏ユā鎷熺紦鍐诧紝蹇呴』鏍囦负鍙楁帶鐘舵€侊紝涓嶅啋绉扮湡瀹炴柇缃戞祦寮忕紦鍐叉祴璇曘€?
+
+鏈€缁堢粨鏋滐細
+
+- 鍏堢敤瀹為檯 `TtsMouthTracker` 鏂板洖褰掑緱鍒板け璐ワ細鏃?envelope 涓?paused=true 鏃剁數骞崇害 0.6449锛屾棩蹇?`operations/audio-mouth-before.log`锛屼笉鏄彧鎸夋帹娴嬫敼鍔ㄣ€備慨澶嶅悗浠讳綍鏈?audio 鐨勮矾寰勭粺涓€妫€鏌?paused/ended/seeking/readyState<3锛涙棤鍖呯粶鏃朵粛灞炴枃瀛楀洖閫€锛屼絾浠?audio.currentTime 鍙栨牱锛屼笉鍐嶉殢娓叉煋鏃堕棿鍚戝墠璧般€傚悗閫€ seek 閲嶇疆鏂囨湰绱㈠紩锛? 鏃跺埢鍚堟硶锛岄潪娉曟椂闂?鍖呯粶鍊艰繑鍥炴湁闄?[0,1]锛宑lear 鍚庤繜鍒?envelope 鎴栨棫 audio 缁撴灉鎷掔粷銆?
+- `speakHttp` 涓€涓?audio 鍙惎鍔ㄤ竴娆?tracker/瑙ｇ爜锛岄噸澶?playing 涓嶅啀娓呮帀宸叉湁鍖呯粶锛泂houldAbort 鍦?playing 鍓嶆鏌ワ紝鍙栨秷鍚庨娆¤繜鍒?playing 涔熶笉鑳?start銆傜粨鏉?澶辫触 finally 瑙ｉ櫎鍥涗釜浜嬩欢澶勭悊鍣ㄥ苟淇濈暀鍘?URL 閲婃斁銆備笉鏀瑰彉鍚堟垚/鍏紑璁剧疆/澶栭儴 SDK锛屼笉寮曞叆鏂版挱鏀惧櫒鎴栨挱鏀捐秴鏃剁瓥鐣ャ€?
+- 鏂板 7 椤?tracker/瀹為檯 TTS controller 鍥炲綊锛岃鐩栨棤 envelope 鏆傚仠/缁撴潫/缂撳啿/seek銆佹寜闊抽鏃堕棿涓庡洖閫€銆佸凡瑙ｇ爜鐨勬殏鍋?鎭㈠銆?/闈炴硶鍊笺€佹棫 envelope銆侀噸澶?playing 涓庡彇娑堝墠灏氭湭棣栨 playing 鐨勮繜鍒颁簨浠躲€傞粯璁ゅ簲鐢?**736锛?31 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛岀被鍨嬪拰鏋勫缓閫氳繃锛屾棩蹇?`operations/audio-mouth-{scoped,app-tests,typecheck,build}.log`銆傛彃浠?104/104 涓庝笁濂戠害涓婁竴杞€氳繃锛屾湰杞笉鏀瑰叾浠ｇ爜/鍗忚锛屼笉閲嶅鏃犲叧妫€鏌ャ€?
+- 鐪熷疄鐙珛 profile `audio-mouth-20261024`锛岃瘉鎹?`D:/Frankenstein/Uta-Workspace/operations/audio-mouth-2026-10-24/`銆傛湰鏈?PCM 瀹為檯 Audio 鎾斁銆佸寘缁滆В鐮佸洖璋冨欢杩?3 绉掞紱鍦ㄦ湭寰楀埌鍖呯粶鏃舵敞鍏?readyState=2 / seeking=true锛岀湡瀹?Core open 闄嶄綆鑷?<0.03 涓?speechActive 淇濈暀锛屾仮澶嶆椂涓嶉噸澶嶈В鐮併€傜湡瀹?currentTime seek 鍒板凡鐭ラ潤闊冲尯銆佽嚜鐒?ended銆佺湡瀹?pause銆佹崟鑾风殑杩熷埌 playing銆佸彇娑堝悗寤惰繜瑙ｇ爜鍧囬獙銆侾CM volume=0锛涘睘鎬ф敞鍏ュ彧鏄彈鎺х姸鎬侊紝涓嶆槸瀹炴祴缃戠粶娴佸紡娆犺浇鎴栦汉宸ュ惉鎰熴€?
+- 棣栬疆 a 鐨勮剼鏈瓑寰呬笉鍒?fallback 寮€鍙ｆ牱鏈€屽け璐ワ紝`failed-a.json` 淇濈暀锛屾病鏈夎冻澶熻瘉鎹‘瀹氬師鍥犮€俠 澧炲姞鍒濆绛夊緟/鍙鏍堣瘖鏂悗 6 椤归€氳繃锛涗负鎺掗櫎璇婃柇鍓綔鐢紝c 鍘绘帀 stack 璋冪敤锛屼粎绛?Core 瀹為檯閲囨牱灏辩华鍚庣嫭绔嬮噸鍚楠岋紝6 椤瑰啀閫氳繃銆傛渶缁?`results.json` 涓?c锛宍results-b.json` 涓?b锛涗笉鎶婅繖涓ゆ閫氳繃褰撴垚棣栨鍚姩鏃跺簭鏍瑰洜宸蹭慨澶嶃€?
+- a/b/c 閮借褰曚簡鏈疆瀹為檯韬唤骞舵甯搁€€鍑猴紝cleanup 鍧?forced=false / endpointRemoved=true锛?310/9311 涓庢湰鏈哄亣鏈嶅姟娓呯悊銆傚師寮€鍙戝疄渚嬫湭鍋滄锛屽洓浠藉彈淇濇姢鏂囨。 hash 鏈彉锛屾寮?AppData/DS/stable/鏃ュ父 exe/ZIP 涓嶅彉銆備笅杞户缁ā鍨嬫浛鎹㈡椂鐨勫彛鍨嬪熬鐘舵€佷氦鎺ワ紝棣栨鍚姩鏍锋湰澶辫触鍙︿繚鐣欒拷鏌ワ紱涓嶆槸瀹屾暣澹伴煶鍔熻兘楠屾敹銆?
+
+涓嬩竴杞凡鍑嗗闄愬畾浠诲姟鍗曪細`docs/workflow/NEXT-MODEL-MOUTH-TASK.md`銆傜敤鎴疯€冭檻鍒囧埌 Luna 鎵ц锛屽綋鍓嶄粎鍑嗗璇存槑锛屾湭鍒囨崲妯″瀷銆佹湭娲惧崟銆傚姛鑳藉熀绾?`c00f49d`锛涢噸鐐规槸鍖哄垎妯″瀷骞虫粦/閲婃斁鐘舵€佷笌浠嶅湪杩涜鐨勯煶棰?鏂囨湰杩涘害锛屽厛澶嶇幇鍚庝慨澶嶏紝瀹屾垚杩欎竴椤瑰悗鍋滄锛屼笉鑷姩鎺ユ墜瀹屾暣鎸佺画琛ㄧ幇寮曟搸銆?
+
+### 宸插畬鎴愶細妯″瀷鍒囨崲鏃堕殧绂诲彛鍨嬪熬鐘舵€?
+
+鎸変笂杩颁换鍔″崟瀹屾垚銆備慨澶嶅墠鐢ㄧ湡瀹?RAF composable 涓庣湡瀹?loader `setModelLipSync` 澶嶇幇锛欰 鏀跺彛灏惧€间覆鍒?B锛圔 `ParamMouthB` 琚啓 `0.2543222993`锛岃€?fixture 榛樿鏄?`0.6`锛夛紱鍚屾ā鍨?mouth 鍙傛暟浠?A 鏀瑰埌 B 鍚庯紝鏃?A 浠嶅仠鍦?`0.6640890188`锛屾湭鎭㈠榛樿 `0.25`銆傛椿鍔?TTS 鎹㈡ā鍨嬩篃浼氭部鐢ㄦ棫骞虫粦缁撴灉銆?
+
+瀹炵幇淇濇寔鍦?`useStageRenderLoop.ts`锛氱粦瀹氶敭涓烘ā鍨嬪璞′笌 mouth 鍙傛暟 ID锛涙棫妯″瀷浠嶅瓨娲绘墠閫氳繃鏃㈡湁鍏ュ彛閲婃斁锛屽凡閿€姣佹ā鍨嬩笉璇诲啓 Core銆傛柊绌洪棽缁戝畾浠庢湰鍦板綊涓€鍖?0 寮€濮嬩笖涓嶅己鍐欑洰鏍囨ā鍨嬶紱璇磋瘽鏃朵粠褰撳墠 TTS/鏂囨湰杈撳叆鏍锋湰鎺ョ銆傛祦寮忔枃鏈椂閽熷湪鏃犳ā鍨嬫湡闂寸户缁帹杩涳紝涓嶉噸鎾€佷笉娓呯┖ Audio銆俙gain` 鏄綊涓€鍖栧€艰緭鍑轰箻鏁拌€岄潪缁戝畾閿紱鍚岀粦瀹氳皟鏁?gain 缁х画骞虫粦褰掍竴鍖栬緭鍏ワ紝涓嶆惡甯︽棫妯″瀷 raw 鍊硷紝鏂板鐢ㄤ緥楠岃瘉姝ら€夋嫨涓庨檺骞呫€?
+
+缁撴灉璁板綍锛歔`docs/workflow/results/model-switch-mouth-2026-10-24.md`](results/model-switch-mouth-2026-10-24.md)銆? 涓柊 RAF/loader 鍥炲綊閫氳繃锛涘叏搴旂敤 **744 椤癸紙739 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛沶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤洪€氳繃銆傛渶缁堟瀯寤哄疄闄?Electron 浠庡唴缃?Hiyori 鎹㈠埌 DS锛氬悓涓€涓潤闊?PCM Audio id=1锛屾挱鏀惧櫒 `0.358577s 鈫?1.062553s`锛汥S Core 鏈夊０娈电害 1锛岄潤闊虫 8 甯ф渶澶у紑搴?`0.000565` 涓?speechActive 淇濇寔锛岃嚜鐒剁粨鏉熷悗閲婃斁銆?9 涓喕缁?DS 鏂囦欢 hash 涓嶅彉銆?
+
+璇佹嵁浣嶄簬 `D:/Frankenstein/Uta-Workspace/operations/model-switch-mouth-2026-10-24/`銆俻rofile `model-switch-mouth-20261024` 鐨?Electron 杩涚▼宸查€€鍑猴紝9312/9313 鏃犵洃鍚€佷复鏃?endpoint 宸叉竻鐞嗐€傚彈闄愮幆澧冮杞叏娴嬪洜 localhost EACCES / 涓存椂璺緞 EPERM 澶辫触锛涙甯稿伐鍏峰鎵瑰悗閲嶈窇閫氳繃銆傛渶缁堝鏍告帴绠″墠鍥涗唤鍙椾繚鎶ゆ枃妗?hash 鍏ㄩ儴涓€鑷达紝姝ｅ紡 AppData銆佹ā鍨嬨€乻table銆佹棩甯?exe/ZIP 鏈啓銆傛湰杞埌姝ゅ仠姝紝涓嶅紑濮嬫寔缁〃鐜版帶鍒舵垨鍏朵粬涓嬩竴椤广€?
+
+## 鏈疆瀹屾垚锛氭棩甯稿井琛ㄧ幇鐨勫緟鏈?鎬濊€?宸ヤ綔/鍥炲鎺ュ叆
+
+璧风偣 main `a16a264`銆傜敤鎴锋槑纭巿鏉?Qoder 鎺ユ墜锛岃鐩栨棫鈥滀粎 Codex 寮€鍙戔€濆畨鎺掞紱缁х画鍦ㄤ富鐩綍鍗曚細璇濅覆琛屽紑鍙戯紝鍥涗唤鏃㈡湁鏈彁浜ゆ枃妗ｄ繚鎸佸師瀛楄妭銆傛湰杞彁浜わ細
+
+- `58c22e6` `fix(runtime): deliver host events to the pet window`
+- `8006f83` `feat(live2d): connect everyday micro-performance to real states`
+
+### 鐢ㄦ埛鍙缁撴灉
+
+- 寰呮満锛氬ご閮ㄧ紦鎱㈠皬骞呭乏鍙虫憜鍔紝鍋跺皵涓€娆℃瘮鍘熺敓鐪ㄧ溂鏇存參鐨勬斁鏉鹃棴鐪硷紝鍢村舰淇濇寔杞诲井鏌斿拰銆?
+- 鎬濊€冿細澶撮儴杞诲井鍋忓悜涓€渚с€佺溂鐫涜交寰敹绐勩€佸槾褰㈢暐鏀讹紱鐜版湁鈥滄€濊€冣€濋璁句粛鏄熀纭€銆?
+- 宸ヤ綔/宸ュ叿鎵ц锛氬ご閮ㄥ皬骞呮參鎵€佺溂鐫涗繚鎸佷笓娉ㄣ€佸槾褰㈡帴杩戜腑鎬э紱涓嶆墦鏂€滀笓娉?濂藉鈥濋璁俱€?
+- 鍥炲/娴佸紡锛氬槾褰㈣交寰笂鎵紱鍢撮儴寮€鍚堜粛瀹屽叏鐢辩湡瀹炶闊?鏂囨湰鍙ｅ瀷鎺у埗锛屾棩甯稿眰涓嶅啓寮€鍚堛€?
+- 绛夊緟瀹℃壒/閿欒锛氫娇鐢ㄤ綆骞呯瓑寰呭Э鎬侊紱閿欒缁撴潫鍥炲埌寰呮満銆?
+- 璁剧疆 鈫?瑙掕壊涓庡姩浣?鈫?妯″瀷琛ㄧ幇鏂板鈥滄棩甯歌〃鐜?路 鐘舵€佹紨绀衡€濓紝寰呮満/鎬濊€?宸ヤ綔/鍥炲鍚勬渶澶?4 绉掞紝缁撴潫鑷姩鍥炲埌鐪熷疄鐘舵€侊紱鈥滄妧鏈鎯呪€濇樉绀虹姸鎬併€佽涔夎础鐚拰 Core 鍘熺敓/搴旂敤鏍锋湰銆?
+
+### 鎶€鏈惤鐐逛笌杈圭晫
+
+- `services/performance/ambient-state.ts` 鏄函鐘舵€侀€夋嫨锛氬緟鏈哄紑鍏炽€佸噺灏戝姩鐢汇€佺獥鍙ｅ彲瑙佹€с€佹ā鍨嬪氨缁€佸伐鍧婄紪杈?棰勮銆佸鎵广€乀TS/娴佸紡鍥炲銆佸涓诲伐浣滅姸鎬佸悇鑷湁鏄庣‘浼樺厛绾э紱鏄惧紡缂栬緫鍜岄瑙堟案杩滆璺€?
+- `services/performance/model-runtime.ts` 鏂板甯搁┗ owner锛氬ご閮ㄥ湪鐗╃悊鍓嶄互褰撳墠鍘熺敓/棰勮鍊间负鍩哄噯鍋氬皬骞?add锛涚溂鐫涘湪鐗╃悊鍚庝箻鎬х害鏉燂紱鍢村舰鍦ㄧ墿鐞嗗悗灏忓箙 add銆傚彧浣跨敤宸茬‘璁ょ殑 `headX`銆佸弻鐪笺€乣mouthForm` 涓変釜瀹夊叏閫氶亾锛屼笉鍐?`mouthOpen`锛屼笉鍐欏叾浠?neutral锛屼笉鎺ョ鍘熺敓鍔ㄤ綔/鐗╃悊锛屼笉淇敼 `savedParameters`銆?
+- 骞虫粦鏃堕棿甯告暟鍒嗗埆绾?320/240/360ms锛涚姸鎬佸垏鎹粠褰撳墠鍊艰繃娓★紝涓嶇‖璺炽€傜┖闂叉參鐪ㄧ溂鐨勯棿闅旂害 19 绉掞紝棣栨绾?6 绉掑悗鍑虹幇锛屼笉鏇夸唬鍘熺敓鐪ㄧ溂銆?
+- `loader.ts` 鍙湪鏃㈡湁闃舵鏈熬杩藉姞锛歚applyAmbientHead` 鍦ㄦ棫鏍?鎵嬪姩棰勮涔嬪悗銆佺墿鐞嗕箣鍓嶏紱`applyAmbientPost` 鍦ㄥ弻鐪?鍢撮儴棰勮鍜岄儴浠朵箣鍚庛€傜煭鏃堕瑙堝紑濮嬫椂鏆傚仠甯搁┗灞傦紝缁撴潫鍚庢仮澶嶇湡瀹炵姸鎬併€?
+- `DeskpetStage.vue` 鐩存帴瑙傚療鐪熷疄 `agentWorkingState`銆乣isSpeaking`銆乣ttsSpeaking`銆佸鎵广€乣idleActionsEnabled`銆乣presetEditingLocked`銆乣presetPreviewActive`銆佸噺灏戝姩鐢诲拰椤甸潰鍙鎬э紱鎹㈡ā鍨?鍗歌浇閲婃斁鏃фā鍨嬨€?
+- 璁剧疆鍛戒护鏂板鏃犱换鎰忓弬鏁扮殑 `preview-ambient`锛岃蛋鏃㈡湁妯″瀷/浼氳瘽缁戝畾銆佸伐鍧婁簰鏂ャ€佽秴鏃跺拰鍏抽棴閲婃斁銆傛紨绀哄彧鏄复鏃惰鐩栫湡瀹炵姸鎬侊紝缁撴潫鎭㈠锛涗笉鎸佷箙鍖栥€佷笉鏂板鍏紑璁剧疆瀛楁銆?
+- 淇鏃ч泦鎴愮己闄凤細杩愯妗ュ師鍏堝彲鑳芥妸瀹夸富浜嬩欢鍙戠粰鈥滅涓€涓彲鐢ㄧ獥鍙ｂ€濓紝璁剧疆绐楀彛鎵撳紑鏃舵瀹犳敹涓嶅埌銆俙windowCommandSink` 鐜板湪鍙樉寮忔寚瀹氱獥鍙ｏ紝涓昏繘绋嬪彧鎶曢€掑疇鐗╀富绐楀彛锛涙柊澧炲洖褰掓祴璇曘€?
+- 鏈疆涓嶄娇鐢ㄦ柊璁剧疆 schema锛屼笉鎭㈠鏃у钩鍙板垎宸?浠诲姟鍖?鐩戝惉锛涗笉閲嶅仛 `NEXT-MODEL-MOUTH-TASK.md`锛屼篃涓嶆妸棣栨闊抽閲囨牱杩芥煡浣滀负涓嬩竴椤广€?
+
+### 楠岃瘉涓庤瘉鎹?
+
+- 搴旂敤 **756 椤癸紙751 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛涙彃浠?**104/104**锛沶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€佷笁浠藉叡浜绾︽鏌ラ€氳繃銆傛柊澧?12 椤规祴璇曪細10 椤规棩甯歌〃鐜拌繍琛屾椂/鐘舵€侀€夋嫨銆? 椤?ambient 鍛戒护鐧藉悕鍗曘€? 椤硅繍琛屾ˉ绐楀彛閫夋嫨銆?
+- 鐪熷疄 DS锛坄ambient-performance-20261024` profile锛宲orts 9314/9315锛?8 椤归€氳繃锛?47 鍙傛暟/44 琛ㄦ儏/8 鍔ㄤ綔锛涘緟鏈哄ご閮ㄧ害 -0.9锝?0.75 缂撴參鍙樺寲锛屽槾褰?-0.5鈫?0.32锛涚湡瀹炲涓?HTTP `thinking`/`tool_running`/`streaming` 浜х敓涓嶅悓濮挎€侊紱瀹屾垚/閿欒鍥炲埌寰呮満锛涘洓涓缃紨绀鸿嚜鍔ㄥ拰鎵嬪姩缁撴潫锛涘ご閮ㄩ瑙堟殏鍋滃悗鎭㈠锛涘噺灏戝姩鐢绘殏鍋滐紱璁剧疆绐楀叧闂噴鏀撅紱59 浠藉彈鎺?DS 鏂囦欢 SHA256 涓庡喕缁撴竻鍗曚竴鑷淬€?
+- 璇佹嵁鐩綍 `D:/Frankenstein/Uta-Workspace/operations/ambient-performance-2026-10-24/`锛歚electron-results.json`銆乣samples.json`銆乣hash-check.json`銆乣ds-ambient-*.png`銆乣ds-demo-*.png`銆乣ds-ambient-section*.png`銆乣verify.mjs`銆乣start.ps1`銆乣process-full-run.json`銆乣process.json`銆傛埅鍥惧凡瀹為檯鏌ョ湅锛氬緟鏈轰袱甯уЭ鎬佷笉鍚岋紝鎬濊€?宸ヤ綔澶撮儴鏈濆悜涓庣溂鐫涘紑鍚堜笉鍚岋紝鍥炲鏈夊彲瑙佸井绗戙€?
+- 瀹屾暣楠屾敹瀹炰緥 PID 33064锛?026-10-24 14:11:23 鏈満鏃跺尯锛変笌琛ユ埅鍥惧疄渚?PID 25632锛?4:12:38锛夊潎宸叉甯搁€€鍑猴紱9314/9315 鏃?LISTENING銆佷复鏃?endpoint 宸插垹闄ゃ€備笉鎸夊巻鍙?PID 鍋滄鍏朵粬瀹炰緥銆?
+- 鏈噸娴嬬湡瀹炴湁澹?TTS/PCM 鍙ｅ瀷锛涙湰杞€滃洖澶嶁€濅娇鐢ㄧ湡瀹炲涓绘祦寮忕姸鎬侊紝璇煶鍗犵敤閫昏緫娌跨敤涓婅疆宸查獙璇侀摼璺紝骞舵湁鈥滄棩甯稿眰涓嶅啓寮€鍚堚€濈殑琛屼负娴嬭瘯銆傛湭楠屽閮ㄥ钩鍙板彂鐜般€佺湡瀹為害鍏嬮銆乑IP 鍊欓€夋垨鏃ュ父 exe锛涙寮?AppData/妯″瀷銆乻table銆佹棩甯?0.1.1 涓庡洓浠藉彈淇濇姢鏂囨。鏈敼銆?
+
+### 涓嬩竴姝?
+
+鍏堟寜瀹為檯瑙傛劅璋冩暣鍥涙€佸箙搴︿笌鑺傚锛岃ˉ瀹℃壒绛夊緟/閿欒鎭㈠鐨勭粏鑺傚拰鍙ョ骇璇煶閲嶉煶锛涙槸鍚﹀鍔犵嫭绔嬧€滆〃鐜板己搴?瀹夐潤妯″紡鈥濊缃渶鍙﹀仛杩佺Щ璁捐锛屼笉涓存椂鎵╁叕寮€璁剧疆 schema銆傜户缁娇鐢ㄥ彈鎺?DS锛屼笉鎶婃湰杞洓鎬佸井琛ㄧ幇鏍囨垚瀹屾暣鎯呯华瀵兼紨鎴栨柊榛樿寮曟搸銆傞娆￠煶棰戦噰鏍疯拷鏌ヤ笉鍒椾负涓嬩竴椤广€?
+
+## 鏈疆瀹屾垚锛氳闊抽噸闊炽€佸鎵圭瓑寰呬笌甯搁┗棰勮璁╄矾
+
+璧风偣 main `a4eb73b`銆傜粺涓€涓荤洰褰曚覆琛屽疄鏂斤紝鍥涗唤鍘熸湁鍙椾繚鎶ゆ枃妗ｄ繚鎸佸師瀛楄妭銆傛彁浜?`ca56d61`銆?
+
+### 鐢ㄦ埛鍙缁撴灉
+
+- 鍥炲鏈楄鏃讹紝鐪熷疄鍙ｅ瀷鐢靛钩浼氳交寰姞寮哄槾褰紝骞跺湪鍝嶅害涓婂崌鐨勫彞棣栫粰澶撮儴涓€涓緢灏忕殑鏂瑰悜閲嶉煶锛涘槾閮ㄥ紑鍚堜粛瀹屽叏鐢辩幇鏈夎闊?鏂囨湰鍙ｅ瀷閾捐矾鎺у埗銆?
+- 瀹℃壒鍑虹幇鏃惰鑹茶繘鍏ユ洿瀹夐潤鐨勭瓑寰呭Э鎬侊紙杞诲亸澶淬€佽交寰敹鐪硷級锛屾壒鍑?鎷掔粷鍚庡洖鍒版棩甯革紱閿欒鐘舵€佹部鐢ㄥ悓涓€浣庡箙绛夊緟娈碉紝缁撴潫鍚庡洖寰呮満銆?
+- 璁剧疆閲屸€滈拤涓哄父椹烩€濈幇鍦ㄤ細鍚屾缁欐瀹狅紱鏃ュ父寰姩绔嬪嵆璁╄矾锛屽彇娑堥拤浣忓悗鎭㈠銆傝缃噸鏂版墦寮€浼氫粠瀹犵墿蹇収璇诲洖閽変綇鐘舵€併€?
+
+### 鎶€鏈惤鐐?
+
+- `setModelLipSync` 鐜板湪鍚屾椂鎶婄湡瀹炲彛鍨嬬數骞冲啓鍏ユ€ц兘 runtime銆傚彧鏈?`active` 鏃舵墠璁″叆锛屾敹鍙ｅ熬娈典笉璁￠噸闊筹紱鐢靛钩闃堝€肩害 0.35銆侀潤闊抽棿闅旂害 450ms銆侀噸闊冲喎鍗寸害 1200ms锛岄噸闊冲寘缁?700ms銆佽涔夊鐩?0.028锛屽苟鍦ㄧ害 90ms 鍐呭钩婊戙€傞噸闊冲彧鍔犲湪 `headX`锛屼笉鍐?mouth open銆佷笉鍐欏叾浠栭€氶亾銆?
+- 鍥炲鎬?`speaking` 鐨勫槾褰㈤殢鐢靛钩澧炲姞鏈€澶氱害 0.04 璇箟锛屽ご閮ㄦ憜鍔ㄥ箙搴﹂殢鐢靛钩鏈€澶氬鍔犵害 0.015锛涗粛鍦ㄥ師瀹夊叏鑼冨洿鍐?clamp銆?
+- `waiting` 濮挎€佽皟鏁翠负鏇村畨闈欙細澶撮儴鍋忕Щ 0.08銆佹尟骞?0.015銆佺溂鐫涗箻鎬?0.97銆佸槾褰?+0.02銆?
+- 鐘舵€侀€夋嫨鏂板 `holdPresetPinned`锛歚activeHoldPresetId` 闈炵┖涓斾笉鏄?`neutral` 鏃舵殏鍋滄棩甯稿眰锛沗neutral` 瑙嗕负鎺т欢閲嶇疆锛屼笉鏄敤鎴烽拤浣忋€?
+- 鏂板鍐呴儴璁剧疆鍛戒护 `set-hold-preset`锛堝彧鎺ュ彈 鈮?00 瀛楃鐨勫瓧绗︿覆锛岀┖涓茶〃绀哄彇娑堬級銆傝缃獥 `togglePinPreset` 鍦ㄩ拤浣?鍙栨秷鏃跺悓姝ワ紱鎭㈠榛樿銆佹竻绌烘帶浠躲€佸垹闄よ嚜瀹氫箟棰勮涔熷悓姝ャ€傚疇鐗╁揩鐓х幇鍦ㄥ甫 `activeHoldPresetId`锛岃缃獥 hydrate 鍥炲～锛岄伩鍏嶉噸寮€鍚?UI 涓庡疇鐗╀笉涓€鑷淬€?
+- `ModelPerformanceView.ambient` 鏂板 `accent` 涓?`speechLevel` 璇婃柇锛涒€滄妧鏈鎯呪€濇樉绀鸿闊崇數骞?閲嶉煶锛孋ore 鏍锋湰浠嶆槸鍘熺敓鈫掓棩甯搞€?
+
+### 楠岃瘉涓庤瘉鎹?
+
+- 搴旂敤 **760 椤癸紙755 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛涙彃浠?**104/104**锛沶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€佷笁浠藉绾﹂€氳繃銆傜浜岃疆鏂板 4 椤癸細璇煶閲嶉煶/鍢村舰銆佺瓑寰呭Э鎬併€乭old-preset 鐧藉悕鍗曘€佸疇鐗╁父椹绘Ы鍚屾锛涚涓€杞柊澧?12 椤广€?
+- 鐪熷疄 DS 绗簩杞紙`ambient-refine-20261024`锛宲orts 9316/9317锛? 椤归€氳繃锛?
+  - 鏈湴鍙楁帶 8 绉?PCM锛坴olume=0锛夊彧璇锋眰涓€娆★紱鐪熷疄鍙ｅ瀷鐢靛钩鍒?1.0锛屽彞棣栭噸闊虫渶澶х害 0.0204锛涘洖澶嶅槾褰㈢害 0.17鈫?.216 闅忕數骞冲彉鍖栵紱Core 寮€鍚堜粛鐢辫闊抽摼璺┍鍔紙鏈?>0.1 鐨勫紑鍙ｏ級锛岀粨鏉熷悗闂悎锛涙棩甯告牱鏈彧鎶?`ParamMouthForm`锛屼笉鍐欏紑鍚堛€?
+  - 鐪熷疄 `/approval/ask` 寮瑰嚭瀹℃壒鍗★紝鏃ュ父鐘舵€佽繘鍏?`waiting`锛岀偣鍑绘壒鍑嗚繑鍥?`allowed-once`锛岄殢鍚庡洖 `idle`銆?
+  - 閫氳繃鐪熷疄璁剧疆 UI 鐨?`.capsule-pin-btn` 閽変綇棰勮锛屽疇鐗?`activeHoldPresetId` 鏇存柊銆乣ambient.state=null`锛涘彇娑堝悗鎭㈠ `idle`銆?
+  - 59 浠藉彈鎺?DS 鏂囦欢 SHA256 涓嶅彉銆?
+- 璇佹嵁鐩綍 `D:/Frankenstein/Uta-Workspace/operations/ambient-refine-2026-10-24/`锛歚electron-results.json`銆乣captures.json`銆乣hash-check.json`銆乣ds-speech-accent.png`銆乣ds-speech-restored.png`銆乣ds-approval-waiting.png`銆乣ds-pinned-preset.png`銆乣verify.mjs`銆乣start.ps1`銆乣process.json`锛圥ID 13372锛?026-10-24 14:33:54 鏈満鏃跺尯锛夈€傝繘绋嬫甯搁€€鍑猴紝9316/9317 鏃?LISTENING锛屼复鏃?endpoint 宸插垹闄ゃ€?
+- 杈圭晫锛歅CM 浣跨敤 `volume=0` 鐨勬湰鍦板彈鎺ч煶棰戯紝鍙獙璇佹挱鏀炬椂閽?鍖呯粶/鐢婚潰锛屼笉鏄汉宸ュ惉鎰熸垨澶栭儴浜戠 TTS锛涙湭楠岀湡瀹為害鍏嬮銆佸閮ㄥ钩鍙般€乑IP 鎴栨棩甯?exe銆傜涓€杞?`ambient-performance-20261024` 璇佹嵁淇濈暀涓嶅彉銆?
+
+### 涓嬩竴姝?
+
+鎸夊疄闄呰鎰熻皟鏁撮噸闊冲己搴︺€佸洓鎬佸箙搴﹀拰鑺傚锛涜ˉ閿欒鎭㈠缁嗚妭锛堝鐭殏鍋滈】鍚庡啀鍥炲緟鏈猴級涓庡彲閫夊畨闈欐ā寮忋€傝嫢澧炲姞鐙珛鈥滆〃鐜板己搴︹€濊缃紝闇€瑕佸崟鐙仛鍏紑璁剧疆 schema 杩佺Щ锛屼笉鑳戒复鏃跺瀛楁銆傞娆￠煶棰戦噰鏍疯拷鏌ヤ粛涓嶄綔涓轰笅涓€椤癸紱瀹屾暣鎯呯华瀵兼紨銆佸彞绾ц涔夐噸闊冲拰鍊欓€?ZIP 浠嶅緟鍚庣画銆?
+
+## 鏈疆瀹屾垚锛氱瓑寰呮紨绀轰笌 Hiyori 鏃ュ父鍏煎
+
+璧风偣 main `35a8e40`銆傛彁浜わ細
+
+- `136f3d4` `fix(live2d): keep ambient off unsafe mouth-form defaults`
+- `447c302` `feat(settings): add the waiting posture to the daily demo`
+
+### 鐢ㄦ埛鍙缁撴灉
+
+- 鈥滄棩甯歌〃鐜?路 鐘舵€佹紨绀衡€濈幇鍦ㄦ湁寰呮満/鎬濊€?宸ヤ綔/鍥炲/绛夊緟浜斾釜鍏ュ彛锛涚瓑寰呮紨绀哄彲鐩存帴鐪嬪鎵规椂鐨勪綆骞呭Э鎬侊紝涓嶅繀鍙戠湡瀹炲鎵广€?
+- 鍐呯疆 Hiyori 娌℃湁瀹夊叏鐨勫槾褰㈤€氶亾鏃讹紝闈㈡澘鏄庣‘鎻愮ず鈥滃洖澶嶆紨绀哄彧浣跨敤澶撮儴鍜岀溂鐫涒€濓紱鏃ュ父寰呮満鍙┍鍔ㄥご閮?鐪肩潧锛屼笉鍐嶅皾璇曞啓涓嶅畨鍏ㄥ槾褰€?
+
+### 鍙戠幇骞朵慨澶嶇殑鍏煎缂洪櫡
+
+Hiyori 鐨?`ParamMouthForm` 榛樿鍊间綅浜庤寖鍥翠笂鐣岋紙`-2..1`銆乨efault=1锛夈€傛墜鍔ㄥ槾閮ㄦ祴璇曞師鏈細鎷掔粷瀹冿紝浣嗘棩甯稿眰鐩存帴鐢ㄤ簡 `mappedParameter('mouthForm')`锛屽彧鏍￠獙鈥滃凡鏄犲皠/闈炵墿鐞嗚緭鍑衡€濓紝娌℃湁澶嶇敤鈥滈粯璁ゅ€间袱渚ч兘鏈夌┖闂粹€濈殑瀹夊叏闂ㄦ锛屽鑷?Hiyori 寰呮満浠嶄細鍐欏槾褰€傜幇鍦ㄦ柊澧?`safeMouthForm`锛屾棩甯稿彲鐢ㄦ€у拰搴旂敤璺緞閮戒娇鐢ㄥ悓涓€闂ㄦ锛涙柊澧炲洖褰掞細榛樿鍊煎湪鑼冨洿杈圭紭鏃堕浂鍢村舰鍐欏叆銆乣mouthSample=null`銆佸師鐢熷€间繚鎸併€?
+
+### 楠岃瘉涓庤瘉鎹?
+
+- 搴旂敤 **761 椤癸紙756 閫氳繃銆? 璺宠繃銆? 澶辫触锛?*锛涙彃浠?**104/104**锛沶ode/web 绫诲瀷妫€鏌ャ€佹瀯寤恒€佷笁浠藉绾﹂€氳繃銆傛柊澧?1 椤瑰槾褰㈤粯璁よ竟鐣屽洖褰掞紱姝ゅ墠涓よ疆鍏辨柊澧?16 椤广€?
+- 鍐呯疆 Hiyori 鐪熷疄 Electron锛坄ambient-hiyori-20261024`锛宲orts 9318/9319锛? 椤归€氳繃锛?
+  - 鏃ュ父寰呮満鍙┍鍔ㄥご閮?鐪肩潧锛沗mouthSample` 濮嬬粓涓?null锛涘ご閮ㄦ牱鏈湁鍙鍙樺寲锛涚溂鐫涙牱鏈瓨鍦ㄣ€?
+  - 鏂板鈥滅瓑寰呪€濇紨绀哄湪 Hiyori 涓婃甯歌繍琛屻€乪ye 鏀剁獎銆佽嚜鍔ㄧ粨鏉熷苟閲婃斁宸ラ攣銆?
+  - 闈㈡澘鏄剧ず鈥滃綋鍓嶆ā鍨嬫病鏈夊凡纭鐨勫槾褰㈤€氶亾锛屽洖澶嶆紨绀哄彧浣跨敤澶撮儴鍜岀溂鐫涒€濄€?
+- 璇佹嵁鐩綍 `D:/Frankenstein/Uta-Workspace/operations/ambient-hiyori-2026-10-24/`锛歚electron-results.json`銆乣hiyori-ambient-idle.png`銆乣hiyori-ambient-panel.png`銆乣hiyori-waiting-demo.png`銆乣verify.mjs`銆乣start.ps1`銆乣process.json`锛圥ID 10940锛?026-10-24 14:41:20 鏈満鏃跺尯锛夈€傝繘绋嬫甯搁€€鍑猴紝9318/9319 鏃?LISTENING锛屼复鏃?endpoint 宸插垹闄ゃ€?
+- 鍓嶄袱杞?DS 璇佹嵁淇濈暀涓嶅彉锛汬iyori 鍙獙璇佹棩甯稿緟鏈?绛夊緟婕旂ず锛屾湭閲嶈窇鍏ㄩ儴琛ㄦ儏/鍔ㄤ綔锛屼篃鏈獙 ZIP/鏃ュ父 exe銆傚洓浠藉師鏈夊彈淇濇姢鏂囨。淇濇寔鍘熸牱銆?
+
+### 涓嬩竴姝?
+
+缁х画鎸夊疄闄呰鎰熻皟鏁撮噸闊?骞呭害涓庤妭濂忥紱琛ラ敊璇仮澶嶇粏鑺傚拰鍙€夊畨闈欐ā寮忋€傝嫢澧炲姞鐙珛鈥滆〃鐜板己搴︹€濊缃紝闇€瑕佸崟鐙仛鍏紑璁剧疆 schema 杩佺Щ銆傞娆￠煶棰戦噰鏍疯拷鏌ヤ粛涓嶄綔涓轰笅涓€椤癸紱瀹屾暣鎯呯华瀵兼紨銆佸彞绾ц涔夐噸闊冲拰鍊欓€?ZIP 浠嶅緟鍚庣画銆?
+
+

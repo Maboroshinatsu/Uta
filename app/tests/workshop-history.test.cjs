@@ -1,0 +1,48 @@
+'use strict'
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const createLoader = require('./support/settings-loader.cjs')
+
+const { createSnapshotHistory } = createLoader()('renderer/services/workshop-history')
+
+test('undo and redo walk committed snapshots without duplicating the baseline', () => {
+  const history = createSnapshotHistory()
+  history.reset('{"step":0}')
+  history.commit('{"step":1}')
+  history.commit('{"step":2}')
+  assert.equal(history.canUndo(), true)
+  assert.equal(history.undo(), '{"step":1}')
+  assert.equal(history.undo(), '{"step":0}')
+  assert.equal(history.undo(), null)
+  assert.equal(history.canUndo(), false)
+  assert.equal(history.redo(), '{"step":1}')
+  assert.equal(history.redo(), '{"step":2}')
+  assert.equal(history.redo(), null)
+})
+
+test('a new commit after undo drops the redo branch, and repeated commits are ignored', () => {
+  const history = createSnapshotHistory()
+  history.reset('a')
+  history.commit('b')
+  history.commit('b')
+  history.undo()
+  history.commit('c')
+  assert.equal(history.canRedo(), false)
+  assert.equal(history.undo(), 'a')
+  assert.equal(history.redo(), 'c')
+})
+
+test('history keeps a bounded number of steps and reset starts clean', () => {
+  const history = createSnapshotHistory(3)
+  history.reset('0')
+  for (let i = 1; i <= 6; i++) history.commit(String(i))
+  assert.equal(history.undo(), '5')
+  assert.equal(history.undo(), '4')
+  assert.equal(history.undo(), '3')
+  assert.equal(history.undo(), null)
+  history.commit('x')
+  history.reset('fresh')
+  assert.equal(history.canUndo(), false)
+  assert.equal(history.canRedo(), false)
+  assert.equal(history.snapshot(), 'fresh')
+})

@@ -1,0 +1,339 @@
+{
+  "version": 1,
+  "modelId": "imported-character-072c7e1cdc",
+  "name": "大肥鱼",
+  "idleMotions": [
+    "IDLE"
+  ],
+  "lipSync": {
+    "mouthOpenParam": "ParamMouthOpenY",
+    "gain": 0.8
+  },
+  "focus": {
+    "headXParam": "AngleX",
+    "headYParam": "AngleY",
+    "headZParam": "AngleZ",
+    "headScale": 30,
+    "eyeXParam": "ParamEyeBallX",
+    "eyeYParam": "ParamEyeBallY",
+    "eyeScale": 1,
+    "invertEyeX": true,
+    "bodyXParam": "PositionX",
+    "bodyYParam": "PositionY",
+    "bodyZParam": null,
+    "bodyScale": 30
+  },
+  "baseParameters": {
+    "Divider1": 0,
+    "Divider3": 0,
+    "Paramshuiyin7": 0,
+    "Paramshuiyin8": 0,
+    "Param55": 0,
+    "Param56": 0,
+    "Param57": 0,
+    "Param58": 0
+  },
+  "hiddenDrawables": [],
+  "emotions": {
+    "happy": {
+      "parameters": {
+        "key4": 1,
+        "ParamMouthForm": 0.8,
+        "ParamMouthOpenY": 0.2,
+        "ParamEyeLOpen": 1,
+        "ParamEyeROpen": 1
+      }
+    },
+    "sad": {
+      "parameters": {
+        "key2": 1,
+        "ParamMouthForm": -0.6,
+        "ParamEyeLOpen": 0.65,
+        "ParamEyeROpen": 0.65
+      }
+    },
+    "angry": {
+      "parameters": {
+        "key1": 1,
+        "ParamMouthForm": -0.7,
+        "ParamEyeLOpen": 0.9,
+        "ParamEyeROpen": 0.9
+      }
+    },
+    "surprise": {
+      "parameters": {
+        "ParamEyeLOpen": 1.5,
+        "ParamEyeROpen": 1.5,
+        "ParamMouthOpenY": 0.9
+      }
+    },
+    "embarrassed": {
+      "parameters": {
+        "key7": 1,
+        "key13": 1,
+        "ParamMouthForm": -0.2
+      }
+    },
+    "thinking": {
+      "parameters": {
+        "key6": 1,
+        "ParamMouthForm": 0.15
+      }
+    },
+    "shy": {
+      "parameters": {
+        "key7": 1,
+        "ParamEyeLOpen": 0.8,
+        "ParamEyeROpen": 0.8,
+        "ParamMouthForm": 0.4
+      }
+    },
+    "curious": {
+      "parameters": {
+        "ParamEyeLOpen": 1.1,
+        "ParamEyeROpen": 1.1,
+        "ParamMouthOpenY": 0.2
+      }
+    },
+    "confused": {
+      "parameters": {
+        "key3": 1,
+        "ParamMouthForm": -0.2
+      }
+    }
+  },
+  "animations": {
+    "wave": {
+      "motion": {
+        "group": "竖手指打开",
+        "index": 0
+      }
+    },
+    "nod": {
+      "motion": {
+        "group": "抚胸手打开",
+        "index": 0
+      }
+    },
+    "cheer": {
+      "motion": {
+        "group": "脱捕",
+        "index": 0
+      }
+    }
+  },
+  "controls": {
+    "黑脸": {
+      "label": "黑脸",
+      "category": "face_effect",
+      "parameters": {
+        "key1": 1
+      }
+    },
+    "落泪": {
+      "label": "落泪",
+      "category": "face_effect",
+      "parameters": {
+        "key2": 1
+      }
+    },
+    "圈圈眼": {
+      "label": "圈圈眼",
+      "category": "face_effect",
+      "parameters": {
+        "key3": 1
+      }
+    },
+    "爱心眼": {
+      "label": "爱心眼",
+      "category": "face_effect",
+      "parameters": {
+        "key4": 1
+      }
+    },
+    "><眼": {
+      "label": "><眼",
+      "category": "face_effect",
+      "parameters": {
+        "key5": 1
+      }
+    },
+    "屑屑眼": {
+      "label": "屑屑眼",
+      "category": "face_effect",
+      "parameters": {
+        "key6": 1
+      }
+    },
+    "脸红": {
+      "label": "脸红",
+      "category": "face_effect",
+      "parameters": {
+        "key7": 1
+      }
+    },
+    "加载": {
+      "label": "加载",
+      "category": "toggle",
+      "parameters": {
+        "key8": 1
+      }
+    },
+    "大牙": {
+      "label": "大牙",
+      "category": "face_effect",
+      "parameters": {
+        "key9": 1
+      }
+    },
+    "大钢盆": {
+      "label": "大钢盆",
+      "category": "pose_prop",
+      "parameters": {
+        "key10": 1
+      }
+    },
+    "黑框眼镜": {
+      "label": "黑框眼镜",
+      "category": "pose_prop",
+      "parameters": {
+        "key11": 1
+      }
+    },
+    "单片眼镜": {
+      "label": "单片眼镜",
+      "category": "pose_prop",
+      "parameters": {
+        "key12": 1
+      }
+    },
+    "流冷汗": {
+      "label": "流冷汗",
+      "category": "face_effect",
+      "parameters": {
+        "key13": 1
+      }
+    },
+    "狗尾草": {
+      "label": "狗尾草",
+      "category": "pose_prop",
+      "parameters": {
+        "Movement1": 1,
+        "Movement3": 0,
+        "Param56": 1,
+        "Param57": 0,
+        "Param36": 0.04,
+        "Param39": 0.2,
+        "Param41": -0.732,
+        "Param42": 0,
+        "Param43": 0
+      }
+    },
+    "抚胸": {
+      "label": "抚胸",
+      "category": "pose_prop",
+      "parameters": {
+        "Movement2": 1,
+        "Param56": 1,
+        "Param57": 0,
+        "Param62": 0.034,
+        "Param59": 0.476,
+        "Param60": 0.86,
+        "Param61": 0.002
+      }
+    },
+    "竖食指": {
+      "label": "竖食指",
+      "category": "pose_prop",
+      "parameters": {
+        "Movement1": 0,
+        "Movement3": 1,
+        "Param56": 1,
+        "Param57": 0,
+        "Param40": 1,
+        "Param36": 0,
+        "Param39": 0.322,
+        "Param41": 0.702,
+        "Param42": 0,
+        "Param43": 0
+      }
+    },
+    "长短裙": {
+      "label": "长短裙切换",
+      "category": "outfit",
+      "stages": [
+        {
+          "label": "长裙",
+          "parameters": {
+            "Clothes1": 1
+          }
+        },
+        {
+          "label": "短裙",
+          "parameters": {
+            "Clothes1": 0
+          }
+        }
+      ],
+      "defaultStageIndex": 0
+    },
+    "大小变": {
+      "label": "大小变",
+      "category": "toggle",
+      "stages": [
+        {
+          "label": "大",
+          "parameters": {
+            "Clothes2": 0
+          }
+        },
+        {
+          "label": "中",
+          "parameters": {
+            "Clothes2": 0.4
+          }
+        },
+        {
+          "label": "小",
+          "parameters": {
+            "Clothes2": 1
+          }
+        }
+      ],
+      "defaultStageIndex": 0
+    },
+    "胸口衣服": {
+      "label": "胸口衣服",
+      "category": "outfit",
+      "parameters": {
+        "Clothes3": 1
+      }
+    },
+    "鞋子": {
+      "label": "鞋子",
+      "category": "outfit",
+      "parameters": {
+        "Clothes4": 1
+      }
+    },
+    "尾巴": {
+      "label": "尾巴",
+      "category": "outfit",
+      "stages": [
+        {
+          "label": "开",
+          "parameters": {
+            "Clothes5": 1
+          }
+        },
+        {
+          "label": "关",
+          "parameters": {
+            "Clothes5": 0
+          }
+        }
+      ],
+      "defaultStageIndex": 0
+    }
+  }
+}

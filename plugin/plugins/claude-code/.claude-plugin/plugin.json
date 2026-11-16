@@ -1,0 +1,9 @@
+{
+  "name": "uta-deskpet",
+  "version": "0.1.10",
+  "description": "Uta desktop pet companion: lifecycle state, completion bubble, desktop approval cards, and character tools.",
+  "author": {
+    "name": "Maboroshinatsu"
+  },
+  "mcpServers": "./.mcp.json"
+}

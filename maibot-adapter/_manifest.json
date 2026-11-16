@@ -1,0 +1,34 @@
+{
+  "manifest_version": 2,
+  "id": "uta.maibot-adapter",
+  "version": "0.4.1",
+  "name": "Uta 桌面宠物适配器",
+  "description": "把 Uta 桌面宠物接入 MaiBot：Uta 里的私聊由 MaiBot 回复，MaiBot 处理消息时桌宠同步状态。只在本机回环通信。",
+  "author": {
+    "name": "Maboroshinatsu",
+    "url": "https://github.com/Maboroshinatsu"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/Maboroshinatsu/Uta",
+    "homepage": "https://github.com/Maboroshinatsu/Uta",
+    "issues": "https://github.com/Maboroshinatsu/Uta/issues"
+  },
+  "plugin_type": "adapter",
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "999.999.999"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": ["emoji.get_by_description", "emoji.get_random"],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  }
+}

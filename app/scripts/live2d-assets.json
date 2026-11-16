@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "cubism-core",
+      "url": "https://cubism.live2d.com/sdk-web/bin/CubismSdkForWeb-5-r.3.zip",
+      "sha256": "c70cc086950c7a318515e8ee606d8458a6dd2b96773fc2514ff67bf8a2d9ead7",
+      "maxBytes": 67108864,
+      "files": [
+        {
+          "entry": "CubismSdkForWeb-5-r.3/Core/live2dcubismcore.min.js",
+          "target": "live2dcubismcore.min.js"
+        }
+      ]
+    },
+    {
+      "id": "hiyori-pro",
+      "url": "https://dist.ayaka.moe/live2d-models/hiyori_pro_zh.zip",
+      "sha256": "b1951f1f8762e44c12871ab7694e8a10c6737e0c411310b9fbaedb3c2cf2534b",
+      "maxBytes": 16777216,
+      "files": [
+        {
+          "entry": "hiyori_pro_zh/ReadMe.txt",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/ReadMe.txt"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.2048/texture_00.png",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.2048/texture_00.png"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.2048/texture_01.png",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.2048/texture_01.png"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.cdi3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.cdi3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.moc3",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.moc3"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.model3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.model3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.physics3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.physics3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/hiyori_pro_t11.pose3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/hiyori_pro_t11.pose3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m01.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m01.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m02.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m02.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m03.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m03.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m04.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m04.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m05.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m05.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m06.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m06.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m07.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m07.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m08.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m08.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m09.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m09.motion3.json"
+        },
+        {
+          "entry": "hiyori_pro_zh/runtime/motion/hiyori_m10.motion3.json",
+          "target": "models/hiyori_pro_zh/hiyori_pro_zh/runtime/motion/hiyori_m10.motion3.json"
+        }
+      ]
+    }
+  ]
+}

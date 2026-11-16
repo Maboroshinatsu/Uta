@@ -1,0 +1,18 @@
+{
+  "todoFonts": {
+    "count": 20,
+    "mismatch": []
+  },
+  "reminderSwitchSyncedBothDirections": true,
+  "characterFonts": {
+    "count": 83,
+    "mismatch": []
+  },
+  "cardAndReply": {
+    "oneCard": true,
+    "replyVisible": true,
+    "separate": true
+  },
+  "chimeWaitedForSpeech": true,
+  "clearedOnError": true
+}

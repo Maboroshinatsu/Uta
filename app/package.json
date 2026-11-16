@@ -1,0 +1,55 @@
+{
+  "name": "uta",
+  "version": "0.3.0-beta.1",
+  "description": "Uta - a desktop character companion for AI agent hosts (Codex, DeepSeek Harness, ...)",
+  "author": "Maboroshinatsu",
+  "license": "MIT",
+  "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "assets:prepare": "node scripts/prepare-live2d-assets.mjs",
+    "dev": "node scripts/dev-profile.mjs",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "icon": "electron scripts/render-icon.cjs",
+    "capture": "electron scripts/capture-ui.cjs",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "node --test \"tests/*.test.cjs\"",
+    "test:live2d-capabilities": "node --test tests/model-inspection-adapter.test.cjs tests/model-capability-core.test.cjs tests/capability-diagnostics.test.cjs",
+    "test:plugin": "node --import ../plugin/tests/support/register-dsh-tools.mjs --test \"../plugin/tests/*.test.cjs\"",
+    "plugin:build": "node ../plugin/scripts/build-qoder-plugin.mjs && node ../plugin/scripts/build-antigravity-plugin.mjs && node ../plugin/scripts/build-host-plugins.mjs && node ../plugin/scripts/build-dsh-plugin.mjs",
+    "test:host": "node --test tests/fake-host.test.cjs tests/host-boundary.test.cjs",
+    "electron:install": "install-electron",
+    "verify:windows": "node scripts/verify-windows.mjs",
+    "dist": "npm run plugin:build && npm run licenses && npm run electron:install && electron-vite build && electron-builder --win nsis",
+    "dist:zip": "npm run plugin:build && node scripts/package-zip.mjs",
+    "workspace:status": "node ../scripts/workspace.mjs status",
+    "workspace:new": "node ../scripts/workspace.mjs new",
+    "licenses": "node scripts/dependency-notices.mjs"
+  },
+  "dependencies": {
+    "@pixi/app": "^6.5.10",
+    "@pixi/core": "^6.5.10",
+    "@pixi/display": "^6.5.10",
+    "@pixi/extensions": "^6.5.10",
+    "@pixi/ticker": "^6.5.10",
+    "@pixi/unsafe-eval": "6.5.10",
+    "pinia": "^2.3.0",
+    "pixi-live2d-display": "^0.4.0",
+    "vue": "^3.5.13",
+    "yauzl": "2.10.0"
+  },
+  "devDependencies": {
+    "@types/yauzl": "2.10.3",
+    "@vitejs/plugin-vue": "^5.2.0",
+    "electron": "45.2.3",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.7.0",
+    "vue-tsc": "^2.2.0"
+  }
+}

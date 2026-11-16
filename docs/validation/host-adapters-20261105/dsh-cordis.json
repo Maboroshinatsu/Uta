@@ -1,0 +1,9 @@
+{
+  "host": "DeepSeek Harness",
+  "sdk": "@deepseek-ai/cordis 4.0.5 from installed archive",
+  "pluginMounted": true,
+  "realEventBusApproval": true,
+  "hostIdentityCanonical": true,
+  "sessionIdentityExact": true,
+  "modelInvoked": false
+}

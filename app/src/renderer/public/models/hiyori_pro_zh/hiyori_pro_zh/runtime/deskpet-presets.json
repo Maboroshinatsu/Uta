@@ -1,0 +1,458 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-07T05:41:04.924Z",
+  "presets": [
+    {
+      "id": "neutral",
+      "label": "日常待机·微甜端庄",
+      "description": "",
+      "emotion": "neutral",
+      "group": "日常",
+      "controls": [],
+      "parameters": {
+        "ParamAngleZ": 2,
+        "ParamAngleY": 1.5,
+        "ParamBodyAngleZ": 0.8,
+        "ParamMouthForm": 1
+      },
+      "steps": [
+        {
+          "durationMs": 800,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleZ": 2.5,
+            "ParamAngleY": 2,
+            "ParamBodyAngleZ": 1,
+            "ParamMouthForm": 1
+          }
+        },
+        {
+          "durationMs": 1000,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleZ": 2,
+            "ParamAngleY": 1.5,
+            "ParamBodyAngleZ": 0.8,
+            "ParamMouthForm": 1
+          }
+        }
+      ],
+      "finishMode": "hold",
+      "revertHoldMs": 0,
+      "motion": "none",
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "happy",
+      "label": "欢呼雀跃·双手高举",
+      "description": "",
+      "emotion": "happy",
+      "group": "开心",
+      "controls": [],
+      "parameters": {},
+      "steps": [
+        {
+          "durationMs": 2685,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {}
+        },
+        {
+          "durationMs": 2685,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {}
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": {
+        "group": "FlickUp",
+        "index": 0
+      },
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "curious",
+      "label": "歪头打量·探寻好奇",
+      "description": "",
+      "emotion": "curious",
+      "group": "好奇",
+      "controls": [],
+      "parameters": {
+        "ParamAngleZ": 0,
+        "ParamAngleY": 0,
+        "ParamBodyAngleX": 0,
+        "ParamEyeBallX": 0,
+        "ParamEyeBallY": 0,
+        "ParamBrowLY": 0,
+        "ParamBrowRY": 0,
+        "ParamMouthOpenY": 0
+      },
+      "steps": [
+        {
+          "durationMs": 500,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleZ": 13,
+            "ParamAngleY": -6,
+            "ParamBodyAngleX": 3.5,
+            "ParamEyeBallX": -0.65,
+            "ParamEyeBallY": -0.3,
+            "ParamBrowLY": 0.45,
+            "ParamBrowRY": 0.55,
+            "ParamMouthOpenY": 0.3
+          }
+        },
+        {
+          "durationMs": 800,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleZ": 11,
+            "ParamAngleY": -4,
+            "ParamBodyAngleX": 2.5,
+            "ParamEyeBallX": 0.5500000000000002,
+            "ParamEyeBallY": 0.3499999999999999,
+            "ParamBrowLY": 0.35,
+            "ParamBrowRY": 0.35,
+            "ParamMouthOpenY": 0.2
+          }
+        },
+        {
+          "durationMs": 900,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleZ": 0,
+            "ParamAngleY": 0,
+            "ParamBodyAngleX": 0,
+            "ParamEyeBallX": 0,
+            "ParamEyeBallY": 0,
+            "ParamBrowLY": 0,
+            "ParamBrowRY": 0,
+            "ParamMouthOpenY": 0
+          }
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": "none",
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "surprised",
+      "label": "战术后仰·呆萌惊呼",
+      "description": "",
+      "emotion": "surprise",
+      "group": "惊讶",
+      "controls": [],
+      "parameters": {
+        "ParamAngleY": 0,
+        "ParamAngleZ": 0,
+        "ParamBodyAngleY": 0,
+        "ParamShoulder": 0,
+        "ParamBrowLY": 0,
+        "ParamBrowRY": 0,
+        "ParamMouthOpenY": 0,
+        "ParamMouthForm": 1
+      },
+      "steps": [
+        {
+          "durationMs": 180,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 14,
+            "ParamAngleZ": -2,
+            "ParamBodyAngleY": 4,
+            "ParamShoulder": 0.65,
+            "ParamBrowLY": 0.85,
+            "ParamBrowRY": 0.85,
+            "ParamMouthOpenY": 0.7,
+            "ParamMouthForm": 0
+          }
+        },
+        {
+          "durationMs": 570,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 10,
+            "ParamAngleZ": 2,
+            "ParamBodyAngleY": 3,
+            "ParamShoulder": 0.5,
+            "ParamBrowLY": 0.7,
+            "ParamBrowRY": 0.7,
+            "ParamMouthOpenY": 0.5,
+            "ParamMouthForm": 0.35185185185185186
+          }
+        },
+        {
+          "durationMs": 450,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 3,
+            "ParamAngleZ": 1.1428571428571428,
+            "ParamBodyAngleY": 1.7142857142857144,
+            "ParamShoulder": 0,
+            "ParamBrowLY": 0.09999999999999998,
+            "ParamBrowRY": 0.09999999999999998,
+            "ParamMouthOpenY": 0.09999999999999998,
+            "ParamMouthForm": 0.6296296296296297
+          }
+        },
+        {
+          "durationMs": 600,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 0,
+            "ParamAngleZ": 0,
+            "ParamBodyAngleY": 0,
+            "ParamShoulder": 0,
+            "ParamBrowLY": 0,
+            "ParamBrowRY": 0,
+            "ParamMouthOpenY": 0,
+            "ParamMouthForm": 1
+          }
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": "none",
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "sad",
+      "label": "垂首沮丧·委屈叹息",
+      "description": "",
+      "emotion": "sad",
+      "group": "难过",
+      "controls": [],
+      "parameters": {},
+      "steps": [
+        {
+          "durationMs": 4430,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {}
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": {
+        "group": "FlickDown",
+        "index": 0
+      },
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "angry",
+      "label": "娇嗔气恼·噘嘴倒眉",
+      "description": "",
+      "emotion": "angry",
+      "group": "生气",
+      "controls": [],
+      "parameters": {},
+      "steps": [
+        {
+          "durationMs": 1600,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {}
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": {
+        "group": "Tap@Body",
+        "index": 0
+      },
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "shy",
+      "label": "满面绯红·避视含羞",
+      "description": "",
+      "emotion": "shy",
+      "group": "害羞",
+      "controls": [],
+      "parameters": {
+        "ParamCheek": 0,
+        "ParamAngleZ": 0,
+        "ParamAngleY": 0,
+        "ParamBodyAngleZ": 0,
+        "ParamEyeBallX": 0,
+        "ParamEyeBallY": 0,
+        "ParamEyeLSmile": 0,
+        "ParamEyeRSmile": 0,
+        "ParamShoulder": 0,
+        "ParamMouthOpenY": 0
+      },
+      "steps": [
+        {
+          "durationMs": 400,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamCheek": 1,
+            "ParamAngleZ": -9,
+            "ParamAngleY": -6,
+            "ParamBodyAngleZ": -2.5,
+            "ParamEyeBallX": -0.6,
+            "ParamEyeBallY": -0.4,
+            "ParamEyeLSmile": 0.75,
+            "ParamEyeRSmile": 0.75,
+            "ParamShoulder": 0.4,
+            "ParamMouthOpenY": 0.15
+          }
+        },
+        {
+          "durationMs": 800,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamCheek": 0.8,
+            "ParamAngleZ": -7,
+            "ParamAngleY": -4,
+            "ParamBodyAngleZ": -2,
+            "ParamEyeBallX": 0.29999999999999993,
+            "ParamEyeBallY": 0.09999999999999998,
+            "ParamEyeLSmile": 0.6,
+            "ParamEyeRSmile": 0.6,
+            "ParamShoulder": 0.25,
+            "ParamMouthOpenY": 0.1
+          }
+        },
+        {
+          "durationMs": 800,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamCheek": 0,
+            "ParamAngleZ": 0,
+            "ParamAngleY": 0,
+            "ParamBodyAngleZ": 0,
+            "ParamEyeBallX": 0,
+            "ParamEyeBallY": 0,
+            "ParamEyeLSmile": 0,
+            "ParamEyeRSmile": 0,
+            "ParamShoulder": 0,
+            "ParamMouthOpenY": 0
+          }
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": "none",
+      "custom": true,
+      "source": "user"
+    },
+    {
+      "id": "thinking",
+      "label": "仰目思索·顿悟点头",
+      "description": "",
+      "emotion": "thinking",
+      "group": "思考",
+      "controls": [],
+      "parameters": {
+        "ParamAngleY": 0,
+        "ParamAngleZ": 0,
+        "ParamAngleX": 0,
+        "ParamEyeBallX": 0,
+        "ParamEyeBallY": 0,
+        "ParamBrowLY": 0,
+        "ParamBrowRY": 0,
+        "ParamBrowLAngle": 0,
+        "ParamMouthOpenY": 0,
+        "ParamMouthForm": 1
+      },
+      "steps": [
+        {
+          "durationMs": 450,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 9,
+            "ParamAngleZ": 7,
+            "ParamAngleX": -5,
+            "ParamEyeBallX": -0.55,
+            "ParamEyeBallY": 0.75,
+            "ParamBrowLY": 0.4,
+            "ParamBrowRY": 0.1,
+            "ParamBrowLAngle": 0.25,
+            "ParamMouthOpenY": 0.1,
+            "ParamMouthForm": 0.30000000000000004
+          }
+        },
+        {
+          "durationMs": 750,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 8,
+            "ParamAngleZ": 6,
+            "ParamAngleX": -4,
+            "ParamEyeBallX": 0.4,
+            "ParamEyeBallY": 0.55,
+            "ParamBrowLY": 0.3,
+            "ParamBrowRY": 0.1,
+            "ParamBrowLAngle": 0.2,
+            "ParamMouthOpenY": 0.24999999999999997,
+            "ParamMouthForm": 0.72
+          }
+        },
+        {
+          "durationMs": 500,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": -5,
+            "ParamAngleZ": 0,
+            "ParamAngleX": 0,
+            "ParamEyeBallX": 0,
+            "ParamEyeBallY": -0.19999999999999996,
+            "ParamBrowLY": 0.1,
+            "ParamBrowRY": 0.1,
+            "ParamBrowLAngle": 0,
+            "ParamMouthOpenY": 0.35,
+            "ParamMouthForm": 1
+          }
+        },
+        {
+          "durationMs": 700,
+          "holdMs": 0,
+          "controls": [],
+          "parameters": {
+            "ParamAngleY": 0,
+            "ParamAngleZ": 0,
+            "ParamAngleX": 0,
+            "ParamEyeBallX": 0,
+            "ParamEyeBallY": 0,
+            "ParamBrowLY": 0,
+            "ParamBrowRY": 0,
+            "ParamBrowLAngle": 0,
+            "ParamMouthOpenY": 0,
+            "ParamMouthForm": 1
+          }
+        }
+      ],
+      "finishMode": "revert",
+      "revertHoldMs": 0,
+      "motion": "none",
+      "custom": true,
+      "source": "user"
+    }
+  ]
+}

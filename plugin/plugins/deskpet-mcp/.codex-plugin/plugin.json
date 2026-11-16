@@ -1,0 +1,16 @@
+{
+  "name": "deskpet-mcp",
+  "version": "0.2.0",
+  "description": "Deskpet character tools for Codex: show a bubble, set an emotion, play an animation. Talks only to a locally running Deskpet runtime over loopback.",
+  "mcpServers": "./.mcp.json",
+  "author": {
+    "name": "Maboroshinatsu"
+  },
+  "license": "GPL-3.0",
+  "keywords": [
+    "deskpet",
+    "live2d",
+    "desktop-pet",
+    "character"
+  ]
+}

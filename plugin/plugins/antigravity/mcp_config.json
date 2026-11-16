@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "uta-deskpet": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/runtime/deskpet-mcp.mjs"
+      ],
+      "env": {
+        "UTA_HOST": "antigravity"
+      }
+    }
+  }
+}

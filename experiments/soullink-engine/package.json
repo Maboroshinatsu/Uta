@@ -1,0 +1,12 @@
+{
+  "name": "uta-soullink-engine-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated pure-engine evaluation for Uta. No runtime dependencies.",
+  "scripts": {
+    "build": "node scripts/verify-inputs.mjs && node scripts/build-engine.mjs && node scripts/analyze-surface.mjs",
+    "test": "node --test test/*.test.mjs",
+    "experiment": "node scripts/run-experiments.mjs"
+  }
+}

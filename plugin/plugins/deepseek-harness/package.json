@@ -1,0 +1,29 @@
+{
+  "name": "@uta/deepseek-harness-plugin",
+  "version": "0.5.7",
+  "description": "Uta desktop pet companion plugin for DeepSeek Harness — interactive approval cards on the desktop pet, live working state reflection, and Live2D expression controls.",
+  "type": "module",
+  "main": "./src/index.mjs",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.mjs"
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compat": {
+      "verifiedVersion": "0.2.1-rc.3",
+      "minHostProtocolVersion": 4,
+      "verifiedAt": "2026-10-29",
+      "notes": "插件不携带外部运行时依赖，因此不声明 peerDependencies：DSH 的 @deepseek-ai/* 都是 asar 内置包，声明依赖会让 pnpm 去 registry 解析并安装失败。这里仅作人工复核用的兼容基线记录，插件运行时不解析该字段；宿主升级后需重新核对 approval/request、user-questions/request、tools/execute、session/event 等 seam 的签名。"
+    }
+  },
+  "files": [
+    "cordis.patch.yml",
+    "src/"
+  ]
+}

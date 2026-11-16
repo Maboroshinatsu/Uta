@@ -1,0 +1,16 @@
+{
+  "host": "OpenCode",
+  "version": "1.14.31",
+  "pluginLoaded": true,
+  "realSessionCreated": true,
+  "exactSessionBinding": true,
+  "nativeBridgeCreated": true,
+  "bridgeRemovedOnDispose": true,
+  "runtimeCommands": [
+    "session_bind",
+    "agent_state",
+    "summon",
+    "agent_narrate"
+  ],
+  "modelInvoked": false
+}

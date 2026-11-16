@@ -1,0 +1,15 @@
+[plugin]
+enabled = true
+config_version = "0.1.0"
+
+[bridge]
+host = "127.0.0.1"
+port = 8524
+
+[runtime]
+endpoint_file = ""
+timeout_seconds = 4.0
+
+[chat]
+reflect_all_chats = false
+user_nickname = "桌宠主人"

@@ -1,0 +1,6 @@
+{
+  "name": "uta-deskpet",
+  "displayName": "Uta Desktop Pet Companion",
+  "description": "Uta 桌宠连接器，支持 Live2D 动作编排、默认预设草稿、工作状态和桌宠审批。",
+  "version": "0.1.9"
+}

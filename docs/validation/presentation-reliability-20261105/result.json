@@ -1,0 +1,35 @@
+{
+  "dismiss": {
+    "state": "tool_running",
+    "thinking": true,
+    "badge": false
+  },
+  "workshopLocked": true,
+  "workshopReleased": {
+    "locked": false,
+    "preview": false
+  },
+  "draftFrames": 2,
+  "longStream": {
+    "visible": true,
+    "speaking": true
+  },
+  "completedStream": {
+    "visible": true,
+    "speaking": false
+  },
+  "readingExpired": true,
+  "staleStatus": {
+    "state": "thinking",
+    "thinking": true,
+    "text": "仍在等待宿主更新…"
+  },
+  "idleConfirmed": true,
+  "errors": [],
+  "restoredNativeMotion": {
+    "group": "Idle",
+    "index": 0,
+    "matchesPinnedPreset": true
+  },
+  "boundary": "Isolated Electron, bundled Hiyori, local simulated runtime events; no real host session or packaged upgrade acceptance."
+}
