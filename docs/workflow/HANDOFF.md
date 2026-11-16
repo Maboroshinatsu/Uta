@@ -2,12 +2,13 @@
 
 ## 1. 仓库与版本
 
-- 主源码 `D:/Frankenstein/Uta`，分支 `main`，本轮修复基线 `714f94a`；公开仓库基线 `54a3d26`，两者文件树一致。检查提交用 `git log -12 --oneline`，检查现场用 `git status --short --branch`。已有 18 项语音及宿主相关未提交文件继续保留，不纳入本轮发布。
+- 主源码 `D:/Frankenstein/Uta`，分支 `main`，本轮文档基线 `dda0774`；公开仓库基线 `63a3956`，两者文件树一致。检查提交用 `git log -12 --oneline`，检查现场用 `git status --short --branch`。已有 18 项语音及宿主相关未提交文件继续保留，不纳入本轮提交。
 - 用户授权将源码公开到 `https://github.com/Maboroshinatsu/Uta` 并按实际情况重写 README。公开版使用已提交源码的无历史快照，发布用独立仓库为 `D:/Frankenstein/.codex/publications/Uta`；本地主仓库的历史和在途改动保留。远端核对用 `git -C D:/Frankenstein/.codex/publications/Uta ls-remote origin refs/heads/main`，源码对应提交用该仓库的 `git config --get uta.sourceCommit` 查询。
 - Core、Hiyori 素材及编辑工程共 21 个文件取消 Git 跟踪，本机文件按 SHA256 核对保持原样。Uta 自有的 Hiyori 适配与预设 JSON 仍跟踪。开发和构建按 `app/scripts/live2d-assets.json` 固定来源、SHA256 下载 Core 与 Hiyori 运行文件；已有文件不覆盖，缓存不入 Git。操作见 [Live2D 构建资源](OPERATIONS.md#live2d-构建资源)。
 - 宿主安装与升级：Codex 检测及安装实时读取所选程序路径，连接器为 `0.2.5`，MCP 缓存入口与状态上报版本一致。DSH 连接器为 `0.5.7`，安装同时核对版本、依赖来源与实际链接；更新失败恢复配置和原链接。同一 DSH 数据目录的安装锁由所有 Uta profile 共用，目录联接也视为同一目标；未确认结束的安装须显式解除阻断。OpenCode 手动安装指南包含插件及 MCP 两份文件。
 - 用户要求参考 AIRI 的构建与发布方式，取消第三方资源跟踪，不申请授权或对外联系。本轮进一步授权 GitHub 自动构建 ZIP 与安装版；不改日常设置、不改写已有 Git 历史。
 - 2026-11-16 用户确认按 `v0.3.0-beta.1` 预发布，修复向已有 Release 补传附件。原有 `v0.3` 标签与空 Release 保留，不改为正式 `0.3.0`。发布脚本区分不存在与查询失败，保留已有标题/说明；相同附件跳过，冲突内容不覆盖，草稿在全部附件到齐后发布。
+- 用户明确指出自然语言编辑模型预设与 Live2D 模型兼容性是项目介绍重点。README 在简介和核心能力前部说明两者，并给出宿主会话描述、预览、JSON 草稿导入、工坊调整、自动识别范围及已验证模型样本。语言理解依赖宿主；编译草稿不直接写库，自动适配不等于理解任意编号参数。
 - 应用标识统一使用用户指定的 SVG，唯一源图为 `app/src/renderer/public/uta-icon.svg`。窗口、托盘和 Windows 打包资源已重新生成；设置导航、关于页、标题栏、首次引导及页面图标均引用同一源图。生成入口见 [图标资源](OPERATIONS.md#图标资源)。本轮不更新日常 ZIP。
 - DeepSeek TTS 使用官方 `POST /v1/tools/tts`，支持海星与暗潮两种音色，沿用现有密钥加密、播报队列与口型链路。设置页隐藏该服务不支持的模型、语速、风格控件。整段音频收完后播放，未接入 WebSocket 流式播放。接入与使用说明见 [README](../../README.md#语音与模型)。
 - 已核对本机 DSH `0.2.1-rc.5` 和官方源码 `39163dd`：官方语音模块仅提供识别，没有 TTS 服务方法。Uta 在各宿主下均单独配置 DeepSeek 密钥，不读取 DSH 凭据，也不需要 TTS 专属连接器。[官方语音模块说明](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/experimental/speech-to-text/README.md)
@@ -20,6 +21,7 @@
 
 ## 3. 验证状态
 
+- 本轮仅修改 README 与交接，依据当前代码、连接器技能和既有隔离模型验收记录核实说明；未重新标定模型，未触发桌宠动作或重载。8 项文档回归和本次差异检查通过。
 - 已定位 `v0.3` 的实际失败发生在版本检查：应用与锁文件为 `0.3.0-beta.1`，标签必须为 `v0.3.0-beta.1`。相同源码的双包手动构建已通过，版本检查错误现会显示期望与实际标签。
 - 本轮发布、版本及文档回归 26 项通过，其中新增 9 项发布回归覆盖新建、已有 Release 补传、草稿分页查询及失败、上传中断恢复、同名冲突、GitHub 查询失败、缺失本地包和不可变 Release。该回归使用受控 GitHub 边界；实际标签构建将向预发布草稿补传附件后发布，并核对远端附件。
 - 双包与版本标签回归 9 项通过，覆盖双包来源和 SHA256、仅 ZIP、脏源码、打包期间源码变化、错误参数，以及标签和锁文件两处版本一致性。该回归使用受控构建工具，不代替真实 electron-builder 产物检查。版本检查使用 Node 解析 JSON，避免 PowerShell `ConvertFrom-Json` 拒绝 npm 锁文件的空字符串根包键。
@@ -48,5 +50,5 @@
 ## 7. 未核实项
 
 - DeepSeek 真实付费 API 的音质、服务延迟与账号权限；此次试听只验证本机模拟音频的完整链路。主线提交只包含本轮 TTS 与相应说明，已有宿主语音识别和开源发布条件的未提交改动单独保留。
-- 真实 DSH 麦克风识别、日常数据升级、独占全屏与多屏表现。本轮已获 `v0.3.0-beta.1` 发布授权，标签构建与发布结果以工作流记录和 `git config --get uta.workflowRun` 查询。
+- 真实 DSH 麦克风识别、日常数据升级、独占全屏与多屏表现。`v0.3.0-beta.1` 标签构建及发布已通过，两种包和共 5 个附件的来源及校验清单核对一致；见 [预发布页面](https://github.com/Maboroshinatsu/Uta/releases/tag/v0.3.0-beta.1)。本轮文档提交不改动发行标签或程序包。
 - 本轮隔离构建不会替换既有日常程序。交接历史见 [上一轮现场](archive/HANDOFF-chat-display-20261108.md)。
