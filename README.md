@@ -192,7 +192,7 @@ npm run verify:windows -- --candidate
 
 ZIP 完整解压后运行 `Uta.exe`；`Try-Uta.bat` 使用独立试用数据。安装版可选择安装目录并创建快捷方式，卸载时保留用户数据。两种版本默认均使用 `%APPDATA%/uta`。[ZIP 使用说明](docs/releases/ZIP-FIRST-READ.md)
 
-GitHub [Windows verification](https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml) 会自动检查推送和 PR。手动点击 **Run workflow**，保留勾选 `candidate`，通过检查后可在该次运行的 **Artifacts → Uta-windows-x64** 下载 ZIP 和安装版，附件保留 14 天。推送与应用版本一致的 `v*` 标签时，工作流会自动发布到 [Releases](https://github.com/Maboroshinatsu/Uta/releases)；带预发布标识的版本会标为预发布。
+GitHub [Windows verification](https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml) 会自动检查推送和 PR。手动点击 **Run workflow**，保留勾选 `candidate`，通过检查后可在该次运行的 **Artifacts → Uta-windows-x64** 下载 ZIP 和安装版，附件保留 14 天。推送与应用版本完全一致的标签时，工作流会自动发布到 [Releases](https://github.com/Maboroshinatsu/Uta/releases)；当前版本使用 `v0.3.0-beta.1`，带预发布标识的版本会标为预发布。也可以先创建对应标签的 Release 或草稿，工作流会保留标题和说明、补传附件；同名附件内容不同时会停止。
 
 当前程序未做 Windows 代码签名，下载或运行时可能出现系统提示。
 

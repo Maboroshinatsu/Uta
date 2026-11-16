@@ -75,13 +75,15 @@ npm run verify:windows -- --candidate
 
 Windows 工作流运行同一套检查。普通分支推送与 PR 只检查源码。手动运行默认勾选 `candidate`，同时生成 ZIP 和 NSIS 安装包，核对 SHA256、提交信息、说明文件和连接器，解压 ZIP 后验证模型加载、历史读取、通知和重启。安装包在一次性的 GitHub 托管 Windows runner 中静默安装到临时目录，执行同样的运行检查后卸载；`verify:windows -- --installer` 拒绝在本机和自托管 runner 上运行，避免修改日常安装记录。
 
-两种包验证通过后上传到 `Uta-windows-x64` Actions 附件，保留 14 天。推送 `v<app/package.json 版本>` 标签触发相同构建；标签、应用与锁文件版本必须一致。只有构建、ZIP 和安装版检查全部通过，独立的 Release job 才获得 `contents: write`，重新核对校验清单后创建 Release 并上传两个包、来源清单和 SHA256 清单。含连字符的预发布版本标为 prerelease。已存在的 Release 不自动覆盖，避免同一版本附件被静默替换。
+两种包验证通过后上传到 `Uta-windows-x64` Actions 附件，保留 14 天。推送 `v<app/package.json 版本>` 标签触发相同构建；标签、应用与锁文件版本必须一致。当前版本必须使用 `v0.3.0-beta.1`，`v0.3` 会在打包前被版本检查拒绝。只有构建、ZIP 和安装版检查全部通过，独立的 Release job 才获得 `contents: write`，重新核对校验清单后上传两个包、来源清单和 SHA256 清单。含连字符的预发布版本标为 prerelease，不提升为 Latest。
+
+发布入口为 `.github/scripts/publish-release.mjs`。目标 Release 不存在时新建；已存在时保留标题与说明，仅上传缺少的附件。相同附件的大小和 GitHub SHA256 摘要一致则跳过；不同内容或无法核实的同名附件直接失败，不覆盖。查询失败不会当成不存在，上传中断可重跑失败的 Release job，复用原构建附件。已有草稿在附件全部上传后才发布；不可变 Release 缺少附件时停止。
 
 标签校验由 `app/scripts/verify-release-version.mjs` 读取 npm 锁文件的顶层与根包版本。锁文件包含空字符串根包键，不能直接用默认的 PowerShell `ConvertFrom-Json` 解析。
 
 打包页面的 IPC 文件 URL 校验按解码后的文件路径比较。Windows 短路径中的 `~` 在 Node 生成的 URL 中可能写成 `%7E`，Chromium 保留 `~`；逐字比较 URL pathname 会拒绝自己的页面。host、登记窗口和主 frame 仍须匹配，其他页面不可获权。
 
-查看云端结果用 `https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml`。首次验证使用手动构建，不为测试创建公开版本标签。自动检查仍不代替真实宿主、麦克风、旧数据升级和 Live2D 观感验收。
+查看云端结果用 `https://github.com/Maboroshinatsu/Uta/actions/workflows/windows-check.yml`。发布需有用户授权；2026-11-16 用户确认按 `v0.3.0-beta.1` 预发布处理，并修复已有 Release 的附件补传。原有 `v0.3` 标签与 Release 保留。自动检查仍不代替真实宿主、麦克风、旧数据升级和 Live2D 观感验收。
 
 ## 集成验收与提升
 

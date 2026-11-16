@@ -57,6 +57,7 @@ test('release tags must match the complete application version', t => {
   const result = releaseVersion(fixture(t), 'v0.0.1')
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /versions must match/)
+  assert.match(result.stderr, /Expected tag v0\.0\.1-beta\.1; received v0\.0\.1/)
 })
 
 for (const rootPackage of [false, true]) {
